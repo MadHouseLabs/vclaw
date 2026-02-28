@@ -1,3 +1,4 @@
+mod audio;
 mod config;
 mod event;
 mod tmux;
@@ -68,6 +69,7 @@ async fn main() -> Result<()> {
         config.tts.voice_id.clone(),
         config.tts.model_id.clone(),
     );
+    let audio_player = std::sync::Arc::new(audio::AudioPlayer::new());
 
     // Start TUI
     let mut tui = tui::Tui::new(event_tx.clone())?;
@@ -81,6 +83,7 @@ async fn main() -> Result<()> {
         &tmux_ctrl,
         &mut brain,
         &tts_client,
+        &audio_player,
         &config,
     ).await;
 
@@ -96,6 +99,7 @@ async fn run_main_loop(
     tmux_ctrl: &tmux::TmuxController,
     brain: &mut brain::Brain,
     tts_client: &tts::ElevenLabsClient,
+    audio_player: &std::sync::Arc<audio::AudioPlayer>,
     config: &Config,
 ) -> Result<()> {
     let mut poll_interval = tokio::time::interval(Duration::from_millis(config.tmux.poll_interval_ms));
@@ -144,7 +148,7 @@ async fn run_main_loop(
                         brain.add_user_message(&user_msg);
 
                         // Send to Claude and handle tool loop
-                        handle_brain_response(brain, tmux_ctrl, tts_client, event_tx).await?;
+                        handle_brain_response(brain, tmux_ctrl, tts_client, audio_player, event_tx).await?;
                     }
                     _ => {}
                 }
@@ -169,6 +173,7 @@ async fn handle_brain_response(
     brain: &mut brain::Brain,
     tmux_ctrl: &tmux::TmuxController,
     tts_client: &tts::ElevenLabsClient,
+    audio_player: &std::sync::Arc<audio::AudioPlayer>,
     event_tx: &broadcast::Sender<Event>,
 ) -> Result<()> {
     let _ = event_tx.send(Event::VoiceStatus(VoiceStatus::Thinking));
@@ -192,7 +197,7 @@ async fn handle_brain_response(
                 }
                 brain::ContentBlock::ToolUse { id, name, input } => {
                     has_tool_use = true;
-                    let result = execute_tool(name, input, tmux_ctrl, tts_client, event_tx).await;
+                    let result = execute_tool(name, input, tmux_ctrl, tts_client, audio_player, event_tx).await;
                     let (result_text, is_error) = match result {
                         Ok(text) => (text, false),
                         Err(e) => (e.to_string(), true),
@@ -216,6 +221,7 @@ async fn execute_tool(
     input: &serde_json::Value,
     tmux_ctrl: &tmux::TmuxController,
     tts_client: &tts::ElevenLabsClient,
+    audio_player: &std::sync::Arc<audio::AudioPlayer>,
     event_tx: &broadcast::Sender<Event>,
 ) -> Result<String> {
     match name {
@@ -244,9 +250,22 @@ async fn execute_tool(
                 role: "vclaw".into(),
                 text: message.to_string(),
             });
-            // Fire TTS — in production, stream audio to cpal output
-            if let Ok(audio_data) = tts_client.speak(message).await {
-                tracing::info!("TTS generated {} bytes", audio_data.len());
+            // Fetch TTS audio and play through speakers
+            match tts_client.speak(message).await {
+                Ok(mp3_bytes) => {
+                    tracing::info!("TTS generated {} bytes", mp3_bytes.len());
+                    let player = audio_player.clone();
+                    player.reset();
+                    // Play on a blocking thread so we don't block the async runtime
+                    tokio::task::spawn_blocking(move || {
+                        if let Err(e) = player.play_mp3(mp3_bytes) {
+                            tracing::error!("Audio playback failed: {}", e);
+                        }
+                    }).await?;
+                }
+                Err(e) => {
+                    tracing::error!("TTS request failed: {}", e);
+                }
             }
             let _ = event_tx.send(Event::VoiceStatus(VoiceStatus::Idle));
             Ok("Spoken".into())
