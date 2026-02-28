@@ -22,6 +22,8 @@ pub struct Credentials {
     pub refresh_token: Option<String>,
     #[serde(default)]
     pub token_expires: Option<i64>,
+    #[serde(default)]
+    pub elevenlabs_key: Option<String>,
 }
 
 fn credentials_path() -> Result<PathBuf> {
@@ -65,14 +67,38 @@ pub fn generate_pkce() -> (String, String) {
     (verifier, challenge)
 }
 
+/// Check if Anthropic credentials exist (env var or stored).
+pub fn is_authenticated() -> bool {
+    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        return true;
+    }
+    load_credentials()
+        .ok()
+        .and_then(|c| c.auth_type)
+        .is_some()
+}
+
 /// Store a direct API key.
 pub fn store_api_key(key: &str) -> Result<()> {
-    let creds = Credentials {
-        auth_type: Some("api_key".into()),
-        api_key: Some(key.into()),
-        ..Default::default()
-    };
+    let mut creds = load_credentials().unwrap_or_default();
+    creds.auth_type = Some("api_key".into());
+    creds.api_key = Some(key.into());
     save_credentials(&creds)
+}
+
+/// Store an ElevenLabs API key (preserves existing Anthropic credentials).
+pub fn store_elevenlabs_key(key: &str) -> Result<()> {
+    let mut creds = load_credentials().unwrap_or_default();
+    creds.elevenlabs_key = Some(key.into());
+    save_credentials(&creds)
+}
+
+/// Get ElevenLabs key: env var takes priority, then stored credentials.
+pub fn get_elevenlabs_key() -> Option<String> {
+    if let Ok(key) = std::env::var("ELEVENLABS_API_KEY") {
+        return Some(key);
+    }
+    load_credentials().ok().and_then(|c| c.elevenlabs_key)
 }
 
 /// Start OAuth flow: generate PKCE, build auth URL, open browser.

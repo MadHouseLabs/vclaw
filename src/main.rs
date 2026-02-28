@@ -67,11 +67,37 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Resolve Anthropic auth: env var takes priority, then stored credentials
-    let (anthropic_token, is_oauth) = auth::get_valid_token().await
-        .context("Not authenticated. Run 'vclaw auth' or set ANTHROPIC_API_KEY")?;
-    let elevenlabs_key = std::env::var("ELEVENLABS_API_KEY")
-        .context("ELEVENLABS_API_KEY environment variable not set")?;
+    // Resolve Anthropic auth: env var > stored creds > interactive OAuth
+    let (anthropic_token, is_oauth) = if auth::is_authenticated() {
+        auth::get_valid_token().await?
+    } else {
+        println!("No Anthropic credentials found. Starting authentication...\n");
+        let _verifier = auth::start_oauth()?;
+        eprint!("Paste the code from the browser: ");
+        let mut code = String::new();
+        std::io::stdin().read_line(&mut code)?;
+        let code = code.trim();
+        if code.is_empty() {
+            anyhow::bail!("No code provided");
+        }
+        auth::complete_oauth(code).await?;
+        println!("Authenticated successfully.\n");
+        auth::get_valid_token().await?
+    };
+
+    // Resolve ElevenLabs key: env var > stored creds > optional prompt
+    let elevenlabs_key = if let Some(key) = auth::get_elevenlabs_key() {
+        key
+    } else {
+        eprint!("ElevenLabs API key (optional, press Enter to skip): ");
+        let mut key = String::new();
+        std::io::stdin().read_line(&mut key)?;
+        let key = key.trim().to_string();
+        if !key.is_empty() {
+            auth::store_elevenlabs_key(&key)?;
+        }
+        key
+    };
 
     // Create event bus
     let bus = event::EventBus::new(256);
