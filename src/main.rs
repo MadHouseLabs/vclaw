@@ -1,3 +1,4 @@
+mod auth;
 mod audio;
 mod config;
 mod event;
@@ -25,6 +26,25 @@ async fn main() -> Result<()> {
     let (config, cli) = Config::load_with_cli()?;
 
     // Handle subcommands
+    if let Some(CliCommand::Auth { api_key }) = cli.command {
+        if let Some(key) = api_key {
+            auth::store_api_key(&key)?;
+            println!("API key stored successfully.");
+        } else {
+            let _verifier = auth::start_oauth()?;
+            eprint!("Paste the code from the browser: ");
+            let mut code = String::new();
+            std::io::stdin().read_line(&mut code)?;
+            let code = code.trim();
+            if code.is_empty() {
+                anyhow::bail!("No code provided");
+            }
+            auth::complete_oauth(code).await?;
+            println!("Authenticated successfully.");
+        }
+        return Ok(());
+    }
+
     if let Some(CliCommand::Attach) = cli.command {
         let ctrl = tmux::TmuxController::new("vclaw");
         if ctrl.session_exists().await {
@@ -47,9 +67,9 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Validate API keys
-    let anthropic_key = std::env::var("ANTHROPIC_API_KEY")
-        .context("ANTHROPIC_API_KEY environment variable not set")?;
+    // Resolve Anthropic auth: env var takes priority, then stored credentials
+    let (anthropic_token, is_oauth) = auth::get_valid_token().await
+        .context("Not authenticated. Run 'vclaw auth' or set ANTHROPIC_API_KEY")?;
     let elevenlabs_key = std::env::var("ELEVENLABS_API_KEY")
         .context("ELEVENLABS_API_KEY environment variable not set")?;
 
@@ -63,7 +83,7 @@ async fn main() -> Result<()> {
         tmux_ctrl.start_session().await?;
     }
 
-    let mut brain = brain::Brain::new(anthropic_key, config.brain.model.clone());
+    let mut brain = brain::Brain::new(anthropic_token, config.brain.model.clone(), is_oauth);
     let tts_client = tts::ElevenLabsClient::new(
         elevenlabs_key,
         config.tts.voice_id.clone(),

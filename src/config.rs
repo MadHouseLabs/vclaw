@@ -163,4 +163,10 @@ pub struct Cli {
 pub enum CliCommand {
     /// Reattach to an existing vclaw tmux session
     Attach,
+    /// Authenticate with Anthropic (OAuth or API key)
+    Auth {
+        /// Set a direct API key instead of using OAuth
+        #[arg(long)]
+        api_key: Option<String>,
+    },
 }

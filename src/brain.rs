@@ -162,7 +162,8 @@ pub fn build_user_message(user_said: &str, panes: &[PaneInfo], active_content: &
 
 pub struct Brain {
     client: Client,
-    api_key: String,
+    token: String,
+    is_oauth: bool,
     model: String,
     tools: Vec<ToolDefinition>,
     system_prompt: String,
@@ -170,7 +171,7 @@ pub struct Brain {
 }
 
 impl Brain {
-    pub fn new(api_key: String, model: String) -> Self {
+    pub fn new(token: String, model: String, is_oauth: bool) -> Self {
         let mut tools = build_tool_definitions();
         if let Some(last) = tools.last_mut() {
             last.cache_control = Some(CacheControl { control_type: "ephemeral".into() });
@@ -178,7 +179,8 @@ impl Brain {
 
         Self {
             client: Client::new(),
-            api_key,
+            token,
+            is_oauth,
             model,
             tools,
             system_prompt: build_system_prompt(),
@@ -226,14 +228,20 @@ impl Brain {
             "messages": self.messages,
         });
 
-        let response = self.client
+        let mut req = self.client
             .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            .header("content-type", "application/json");
+
+        if self.is_oauth {
+            req = req
+                .header("authorization", format!("Bearer {}", self.token))
+                .header("anthropic-beta", "oauth-2025-04-20");
+        } else {
+            req = req.header("x-api-key", &self.token);
+        }
+
+        let response = req.json(&body).send().await?;
 
         let api_response: ApiResponse = response.json().await?;
         Ok(api_response)
