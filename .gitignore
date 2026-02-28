@@ -1,2 +1,7 @@
 .worktrees/
 target/
+
+
+# Added by cargo
+
+/target
