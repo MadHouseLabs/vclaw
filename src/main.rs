@@ -2,6 +2,7 @@ mod config;
 mod event;
 mod tmux;
 mod brain;
+mod tts;
 mod tui;
 mod voice;
 

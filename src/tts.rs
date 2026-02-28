@@ -1,0 +1,82 @@
+use anyhow::Result;
+use reqwest::Client;
+
+pub struct ElevenLabsClient {
+    client: Client,
+    api_key: String,
+    voice_id: String,
+    model_id: String,
+}
+
+impl ElevenLabsClient {
+    pub fn new(api_key: String, voice_id: String, model_id: String) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+            voice_id,
+            model_id,
+        }
+    }
+
+    pub fn voice_id(&self) -> &str {
+        &self.voice_id
+    }
+
+    pub fn streaming_url(&self) -> String {
+        format!(
+            "https://api.elevenlabs.io/v1/text-to-speech/{}/stream",
+            self.voice_id
+        )
+    }
+
+    pub async fn speak(&self, text: &str) -> Result<Vec<u8>> {
+        let url = self.streaming_url();
+        let body = serde_json::json!({
+            "text": text,
+            "model_id": self.model_id,
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.75
+            }
+        });
+
+        let response = self.client
+            .post(&url)
+            .header("xi-api-key", &self.api_key)
+            .header("Content-Type", "application/json")
+            .header("Accept", "audio/mpeg")
+            .json(&body)
+            .send()
+            .await?;
+
+        let bytes = response.bytes().await?;
+        Ok(bytes.to_vec())
+    }
+
+    /// Stream audio bytes as they arrive for low-latency playback
+    pub async fn speak_streaming(
+        &self,
+        text: &str,
+    ) -> Result<impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>>> {
+        let url = self.streaming_url();
+        let body = serde_json::json!({
+            "text": text,
+            "model_id": self.model_id,
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.75
+            }
+        });
+
+        let response = self.client
+            .post(&url)
+            .header("xi-api-key", &self.api_key)
+            .header("Content-Type", "application/json")
+            .header("Accept", "audio/mpeg")
+            .json(&body)
+            .send()
+            .await?;
+
+        Ok(response.bytes_stream())
+    }
+}
