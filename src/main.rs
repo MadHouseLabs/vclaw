@@ -40,16 +40,24 @@ fn session_name_for_cwd() -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Log to file so it doesn't pollute the terminal.
+    let (config, cli) = Config::load_with_cli()?;
+
+    // Resolve session name: --session flag > derive from cwd
+    let effective_session = cli.session.clone().unwrap_or_else(session_name_for_cwd);
+
+    // Per-session log files with daily rotation (max 5 files per session).
     let log_dir = dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("vclaw");
+        .join("vclaw")
+        .join("logs");
     std::fs::create_dir_all(&log_dir).ok();
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_dir.join("vclaw.log"))
-        .expect("Failed to open log file");
+    let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix(&effective_session)
+        .max_log_files(5)
+        .build(&log_dir)
+        .expect("Failed to create log appender");
+    let (non_blocking, _log_guard) = tracing_appender::non_blocking(file_appender);
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| {
@@ -57,15 +65,19 @@ async fn main() -> Result<()> {
         });
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_writer(log_file)
+        .with_writer(non_blocking)
         .with_ansi(false)
         .init();
     tracing_log::LogTracer::init().ok();
 
-    let (config, cli) = Config::load_with_cli()?;
-
-    // Resolve session name: --session flag > derive from cwd
-    let effective_session = cli.session.clone().unwrap_or_else(session_name_for_cwd);
+    // Clean up old monolithic log file from previous versions
+    let old_log = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join("vclaw")
+        .join("vclaw.log");
+    if old_log.exists() {
+        let _ = std::fs::remove_file(&old_log);
+    }
 
     // Handle subcommands
     if let Some(CliCommand::Auth { api_key }) = cli.command {
