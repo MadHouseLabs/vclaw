@@ -10,18 +10,25 @@ pub enum VoiceMode {
     PushToTalk,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SttProvider {
+    Whisper,
+    Elevenlabs,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct VoiceConfig {
     #[serde(default = "default_voice_mode")]
     pub mode: VoiceMode,
     #[serde(default = "default_whisper_model")]
     pub whisper_model: String,
+    #[serde(default = "default_stt_provider")]
+    pub stt_provider: SttProvider,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TtsConfig {
-    #[serde(default = "default_tts_provider")]
-    pub provider: String,
     #[serde(default = "default_voice_id")]
     pub voice_id: String,
     #[serde(default = "default_tts_model_id")]
@@ -39,14 +46,6 @@ pub struct BrainConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct TmuxConfig {
-    #[serde(default = "default_shell")]
-    pub default_shell: String,
-    #[serde(default = "default_poll_interval")]
-    pub poll_interval_ms: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub voice: VoiceConfig,
@@ -54,39 +53,33 @@ pub struct Config {
     pub tts: TtsConfig,
     #[serde(default)]
     pub brain: BrainConfig,
-    #[serde(default)]
-    pub tmux: TmuxConfig,
 }
 
-fn default_voice_mode() -> VoiceMode { VoiceMode::AlwaysOn }
+fn default_voice_mode() -> VoiceMode { VoiceMode::PushToTalk }
 fn default_whisper_model() -> String { "base".into() }
-fn default_tts_provider() -> String { "elevenlabs".into() }
-fn default_voice_id() -> String { "JBFqnCBsd6RMkjVDRZzb".into() }
+fn default_stt_provider() -> SttProvider { SttProvider::Elevenlabs }
+fn default_voice_id() -> String { "cgSgspJ2msm6clMCkdW9".into() }
 fn default_tts_model_id() -> String { "eleven_turbo_v2".into() }
-fn default_model() -> String { "claude-haiku-4-5".into() }
+fn default_model() -> String { "claude-sonnet-4-6".into() }
 fn default_complex_model() -> String { "claude-sonnet-4-6".into() }
 fn default_max_context_lines() -> usize { 50 }
-fn default_shell() -> String { "/bin/zsh".into() }
-fn default_poll_interval() -> u64 { 500 }
-
 impl Default for VoiceConfig {
     fn default() -> Self {
-        Self { mode: default_voice_mode(), whisper_model: default_whisper_model() }
+        Self {
+            mode: default_voice_mode(),
+            whisper_model: default_whisper_model(),
+            stt_provider: default_stt_provider(),
+        }
     }
 }
 impl Default for TtsConfig {
     fn default() -> Self {
-        Self { provider: default_tts_provider(), voice_id: default_voice_id(), model_id: default_tts_model_id() }
+        Self { voice_id: default_voice_id(), model_id: default_tts_model_id() }
     }
 }
 impl Default for BrainConfig {
     fn default() -> Self {
         Self { model: default_model(), complex_model: default_complex_model(), max_context_lines: default_max_context_lines() }
-    }
-}
-impl Default for TmuxConfig {
-    fn default() -> Self {
-        Self { default_shell: default_shell(), poll_interval_ms: default_poll_interval() }
     }
 }
 impl Default for Config {
@@ -95,7 +88,6 @@ impl Default for Config {
             voice: VoiceConfig::default(),
             tts: TtsConfig::default(),
             brain: BrainConfig::default(),
-            tmux: TmuxConfig::default(),
         }
     }
 }
@@ -154,6 +146,10 @@ pub struct Cli {
     #[arg(long, value_name = "MODE")]
     pub voice_mode: Option<String>,
 
+    /// Override session name (used by key bindings to target the right daemon)
+    #[arg(long)]
+    pub session: Option<String>,
+
     /// Subcommand
     #[command(subcommand)]
     pub command: Option<CliCommand>,
@@ -168,5 +164,10 @@ pub enum CliCommand {
         /// Set a direct API key instead of using OAuth
         #[arg(long)]
         api_key: Option<String>,
+    },
+    /// Send a control command to the running daemon
+    Ctl {
+        /// Command: mute, interrupt, voice_toggle, status, conversation, quit
+        command: String,
     },
 }

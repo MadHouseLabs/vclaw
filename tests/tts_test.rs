@@ -7,7 +7,7 @@ fn test_tts_client_creation() {
         "test-voice".into(),
         "eleven_turbo_v2".into(),
     );
-    assert_eq!(client.voice_id(), "test-voice");
+    assert!(client.has_key());
 }
 
 #[test]

@@ -11,8 +11,6 @@ pub enum VoiceStatus {
 #[derive(Debug, Clone)]
 pub struct PaneInfo {
     pub id: String,
-    pub title: String,
-    pub size: String,
     pub active: bool,
 }
 
@@ -20,21 +18,13 @@ pub struct PaneInfo {
 pub enum Event {
     // Voice -> Brain
     UserSaid(String),
-    // Brain -> TTS
-    Speak(String),
-    // Brain -> Tmux
-    TmuxExecute(String),
-    ShellInput { pane: String, text: String },
-    // Tmux -> Brain (tool results)
-    TmuxResult { command: String, stdout: String, stderr: String },
-    PaneContent { pane: String, content: String },
-    // State updates -> TUI
+    // State updates
     VoiceStatus(VoiceStatus),
-    PaneListUpdated(Vec<PaneInfo>),
-    ActivePaneContent(String),
     ConversationEntry { role: String, text: String },
     LiveTranscript(String),
     // Control
+    VoiceToggle,
+    MuteToggle,
     Interrupt,
     Quit,
 }

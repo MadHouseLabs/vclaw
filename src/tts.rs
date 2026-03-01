@@ -18,8 +18,8 @@ impl ElevenLabsClient {
         }
     }
 
-    pub fn voice_id(&self) -> &str {
-        &self.voice_id
+    pub fn has_key(&self) -> bool {
+        !self.api_key.is_empty()
     }
 
     pub fn streaming_url(&self) -> String {
@@ -27,30 +27,6 @@ impl ElevenLabsClient {
             "https://api.elevenlabs.io/v1/text-to-speech/{}/stream",
             self.voice_id
         )
-    }
-
-    pub async fn speak(&self, text: &str) -> Result<Vec<u8>> {
-        let url = self.streaming_url();
-        let body = serde_json::json!({
-            "text": text,
-            "model_id": self.model_id,
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75
-            }
-        });
-
-        let response = self.client
-            .post(&url)
-            .header("xi-api-key", &self.api_key)
-            .header("Content-Type", "application/json")
-            .header("Accept", "audio/mpeg")
-            .json(&body)
-            .send()
-            .await?;
-
-        let bytes = response.bytes().await?;
-        Ok(bytes.to_vec())
     }
 
     /// Stream audio bytes as they arrive for low-latency playback
@@ -76,6 +52,12 @@ impl ElevenLabsClient {
             .json(&body)
             .send()
             .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("ElevenLabs TTS failed ({}): {}", status, body);
+        }
 
         Ok(response.bytes_stream())
     }
