@@ -20,38 +20,49 @@ vclaw listens to your voice, enriches your commands with project context, types 
 - **Per-project sessions** — each directory gets its own tmux session and daemon
 - **Graceful degradation** — works without voice (text-only), without TTS, or without mic
 
-## Requirements
-
-- macOS (uses CoreAudio via cpal)
-- [tmux](https://github.com/tmux/tmux)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed
-- Rust toolchain (for building from source)
-- cmake (required by whisper-rs C bindings)
-
 ## Installation
 
+### Quick install (Linux / macOS)
+
 ```sh
-cargo install --path .
+curl -fsSL https://raw.githubusercontent.com/MadHouseLabs/vclaw/master/install.sh | sh
 ```
 
-Or build directly:
+This detects your OS and architecture, downloads the correct binary from the latest GitHub release, and installs it to `/usr/local/bin` (or `~/.local/bin` as a fallback).
+
+### Download manually
+
+Pre-built binaries are available on the [Releases](https://github.com/MadHouseLabs/vclaw/releases) page for:
+
+| Platform | Binary |
+|----------|--------|
+| Linux x86_64 | `vclaw-x86_64-unknown-linux-gnu` |
+| macOS Intel | `vclaw-x86_64-apple-darwin` |
+| macOS Apple Silicon | `vclaw-aarch64-apple-darwin` |
+| Windows x86_64 | `vclaw-x86_64-pc-windows-msvc.exe` |
+
+Download the binary for your platform, make it executable (`chmod +x`), and place it on your `PATH`.
+
+### Build from source
+
+Requires the [Rust toolchain](https://rustup.rs/) and cmake.
 
 ```sh
-cargo build --release
-# Binary at target/release/vclaw
-```
-
-### Build dependencies
-
-whisper-rs compiles the Whisper C++ library from source, which requires cmake:
-
-```sh
+# Install cmake (needed by whisper-rs C++ bindings)
 # macOS
 brew install cmake
-
 # Linux (Debian/Ubuntu)
-sudo apt install cmake build-essential
+sudo apt install cmake build-essential libasound2-dev
+
+# Build
+cargo install --path .
+# Or: cargo build --release && cp target/release/vclaw /usr/local/bin/
 ```
+
+### Runtime dependencies
+
+- [tmux](https://github.com/tmux/tmux)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and on your `PATH`
 
 ### Whisper model (local STT only)
 
