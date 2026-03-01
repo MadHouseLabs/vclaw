@@ -1,11 +1,24 @@
+//! Tmux session management, key sending, and pane capture.
+//!
+//! The [`TmuxController`] owns a session name and provides async methods
+//! to interact with tmux. It handles session creation (starting Claude Code),
+//! status bar configuration, key bindings, and pane content capture for
+//! providing screen context to the brain.
+
 use anyhow::{Context, Result};
 use tokio::process::Command;
 use crate::event::PaneInfo;
 
+/// Controller for a single tmux session.
+///
+/// Each vclaw instance targets one session (derived from the working
+/// directory or the `--session` flag). The controller runs tmux commands
+/// as async child processes via tokio.
 pub struct TmuxController {
     session_name: String,
 }
 
+/// Result of a tmux command execution.
 pub struct CommandResult {
     pub stdout: String,
     pub success: bool,
@@ -18,6 +31,7 @@ impl TmuxController {
         }
     }
 
+    /// Execute a tmux command via `sh -c`. Useful for format strings and pipes.
     pub async fn execute_raw(&self, full_command: &str) -> Result<CommandResult> {
         let output = Command::new("sh")
             .arg("-c")
@@ -46,6 +60,8 @@ impl TmuxController {
         })
     }
 
+    /// Create a new tmux session running Claude Code in the given directory.
+    /// If `continue_session` is true, starts Claude Code with `-c` to resume.
     pub async fn start_session(&self, continue_session: bool, cwd: &std::path::Path) -> Result<()> {
         let claude_cmd = if continue_session { "claude -c" } else { "claude" };
         let cwd_str = cwd.to_string_lossy();
@@ -56,6 +72,7 @@ impl TmuxController {
         Ok(())
     }
 
+    /// List all panes in the session with their IDs and active status.
     pub async fn list_panes(&self) -> Result<Vec<PaneInfo>> {
         let result = self.execute_raw(&format!(
             "list-panes -t {} -F '#{{pane_id}}\t#{{pane_active}}'",
@@ -77,6 +94,7 @@ impl TmuxController {
         Ok(panes)
     }
 
+    /// Capture the last N lines of a pane's visible content.
     pub async fn capture_pane(&self, target: &str, lines: usize) -> Result<String> {
         // -S -N: start N lines before cursor, -E: end at last line of visible pane
         // This captures the most recent content including the current cursor line
@@ -95,6 +113,8 @@ impl TmuxController {
         Ok(())
     }
 
+    /// Send literal text to a pane, optionally pressing Enter after.
+    /// Uses `-l` flag to avoid tmux interpreting key names in the text.
     pub async fn send_keys(&self, target: &str, keys: &str, enter: bool) -> Result<()> {
         // Use execute_args (direct process args) instead of execute_raw (sh -c)
         // to avoid shell escaping issues with special characters in the text.
@@ -106,6 +126,7 @@ impl TmuxController {
         Ok(())
     }
 
+    /// Check if the tmux session exists.
     pub async fn session_exists(&self) -> bool {
         self.execute_raw(&format!("has-session -t {}", self.session_name))
             .await
@@ -127,31 +148,24 @@ impl TmuxController {
             "status-style", "bg=default",
         ]).await?;
 
-        // Left: brand pill + project name
-        let project_name = self.session_name
-            .strip_prefix("vclaw-")
-            .unwrap_or(&self.session_name);
-        let status_left = format!(
-            "#[fg=colour16,bg=colour39,bold] \u{25c6} vclaw #[default] #[fg=colour245]{}#[default] ",
-            project_name
-        );
+        // Left: brand pill only (project name is the session name, visible in tmux)
         self.execute_args(&[
             "set-option", "-t", &self.session_name,
-            "status-left", &status_left,
+            "status-left", "#[fg=colour16,bg=colour39,bold] \u{25c6} vclaw #[default] ",
         ]).await?;
         self.execute_args(&[
             "set-option", "-t", &self.session_name,
-            "status-left-length", "40",
+            "status-left-length", "20",
         ]).await?;
 
-        // Window list styling
+        // Hide window list (removes program name / version noise)
         self.execute_args(&[
             "set-option", "-t", &self.session_name,
-            "window-status-current-format", "#[fg=colour39,bold]#W#[default]",
+            "window-status-current-format", "",
         ]).await?;
         self.execute_args(&[
             "set-option", "-t", &self.session_name,
-            "window-status-format", "#[fg=colour245]#W#[default]",
+            "window-status-format", "",
         ]).await?;
 
         // Key bindings use #{session_name} so tmux resolves the CURRENT session

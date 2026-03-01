@@ -1,8 +1,14 @@
+//! Configuration loading and CLI argument parsing.
+//!
+//! Configuration is loaded from `~/.config/vclaw/config.toml` with defaults
+//! for all fields. CLI arguments override config file values.
+
 use anyhow::Result;
 use clap::Parser;
 use serde::Deserialize;
 use std::path::Path;
 
+/// Voice activation mode.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum VoiceMode {
@@ -10,6 +16,7 @@ pub enum VoiceMode {
     PushToTalk,
 }
 
+/// Speech-to-text provider.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SttProvider {
@@ -17,6 +24,7 @@ pub enum SttProvider {
     Elevenlabs,
 }
 
+/// Voice input settings: activation mode, STT provider, Whisper model.
 #[derive(Debug, Clone, Deserialize)]
 pub struct VoiceConfig {
     #[serde(default = "default_voice_mode")]
@@ -27,6 +35,7 @@ pub struct VoiceConfig {
     pub stt_provider: SttProvider,
 }
 
+/// Text-to-speech settings: ElevenLabs voice and model selection.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TtsConfig {
     #[serde(default = "default_voice_id")]
@@ -35,6 +44,7 @@ pub struct TtsConfig {
     pub model_id: String,
 }
 
+/// Brain (Claude API) settings: model selection and context window size.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BrainConfig {
     #[serde(default = "default_model")]
@@ -45,6 +55,7 @@ pub struct BrainConfig {
     pub max_context_lines: usize,
 }
 
+/// Top-level application configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -109,6 +120,7 @@ impl Config {
         Ok(config)
     }
 
+    /// Load config from file (or defaults) and merge CLI overrides.
     pub fn load_with_cli() -> Result<(Self, Cli)> {
         let cli = Cli::parse();
 
@@ -155,6 +167,7 @@ pub struct Cli {
     pub command: Option<CliCommand>,
 }
 
+/// Subcommands for the vclaw CLI.
 #[derive(clap::Subcommand, Debug)]
 pub enum CliCommand {
     /// Reattach to an existing vclaw tmux session

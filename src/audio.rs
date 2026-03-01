@@ -1,9 +1,20 @@
+//! MP3 audio playback with interrupt support.
+//!
+//! Uses rodio for decoding and playback. The [`AudioPlayer`] supports
+//! immediate interruption from any thread via an `Arc<Sink>` handle —
+//! no polling delay when the user presses F12 to interrupt.
+
 use anyhow::Result;
 use rodio::{Decoder, OutputStream, Sink};
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// Thread-safe audio player that supports immediate interruption.
+///
+/// Playback runs on a blocking thread (via `spawn_blocking`). The
+/// [`interrupt()`](AudioPlayer::interrupt) method can be called from any
+/// thread to stop playback instantly.
 pub struct AudioPlayer {
     interrupted: Arc<AtomicBool>,
     /// Direct handle to the currently playing sink so interrupt() can stop it immediately.

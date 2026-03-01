@@ -1,6 +1,12 @@
+//! ElevenLabs streaming text-to-speech client.
+//!
+//! Sends text to the ElevenLabs TTS API and returns a byte stream of MP3
+//! audio chunks for low-latency playback.
+
 use anyhow::Result;
 use reqwest::Client;
 
+/// Client for the ElevenLabs text-to-speech streaming API.
 pub struct ElevenLabsClient {
     client: Client,
     api_key: String,
@@ -18,6 +24,7 @@ impl ElevenLabsClient {
         }
     }
 
+    /// Whether an API key is configured (TTS is optional).
     pub fn has_key(&self) -> bool {
         !self.api_key.is_empty()
     }

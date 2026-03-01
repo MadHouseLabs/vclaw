@@ -1,3 +1,18 @@
+//! Voice engine: audio capture, speech-to-text, and VAD.
+//!
+//! Supports two STT backends:
+//! - **ElevenLabs realtime** — streaming WebSocket for always-on transcription
+//! - **Local Whisper** — batch transcription via whisper-rs C bindings
+//!
+//! Audio is captured via cpal on a dedicated OS thread (cpal streams are `!Send`).
+//! When the native mic format doesn't match 16kHz mono, samples are resampled
+//! using linear interpolation.
+//!
+//! Three capture modes:
+//! - **Realtime** — PCM chunks streamed to ElevenLabs WebSocket (server-side VAD)
+//! - **AlwaysOn** — local RMS-based VAD triggers batch transcription
+//! - **PushToTalk** — F12 key starts/stops recording, then batch transcription
+
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -171,6 +186,11 @@ fn f32_to_i16_bytes(samples: &[f32]) -> Vec<u8> {
     buf
 }
 
+/// Core voice engine managing audio capture and speech-to-text.
+///
+/// Shared across threads via `Arc`. The audio capture callback runs on a
+/// dedicated OS thread and communicates with async tasks through channels
+/// and atomic flags.
 pub struct VoiceEngine {
     whisper_ctx: Option<Arc<whisper_rs::WhisperContext>>,
     stt_provider: SttProvider,
@@ -182,12 +202,10 @@ pub struct VoiceEngine {
     speech_done_tx: tokio::sync::mpsc::Sender<()>,
     speech_done_rx: Option<tokio::sync::mpsc::Receiver<()>>,
     /// Shared channel for streaming audio chunks to the realtime WebSocket.
-    /// Behind Arc<Mutex> so reconnection can swap the sender without restarting capture.
+    /// Behind `Arc<Mutex>` so reconnection can swap the sender without restarting capture.
     audio_chunk_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>>,
     /// Set to true while TTS is playing to suppress audio streaming.
     pub is_speaking: Arc<AtomicBool>,
-    /// Current audio input level (0-8 scale) for status bar visualization.
-    pub audio_level: Arc<std::sync::atomic::AtomicU8>,
     /// Binary names from $PATH for vocabulary biasing.
     vocab_binaries: Vec<String>,
 }
@@ -211,7 +229,6 @@ impl VoiceEngine {
             speech_done_rx: Some(speech_done_rx),
             audio_chunk_tx: Arc::new(Mutex::new(None)),
             is_speaking: Arc::new(AtomicBool::new(false)),
-            audio_level: Arc::new(std::sync::atomic::AtomicU8::new(0)),
             vocab_binaries,
         })
     }
@@ -237,7 +254,6 @@ impl VoiceEngine {
             speech_done_rx: Some(speech_done_rx),
             audio_chunk_tx: Arc::new(Mutex::new(None)),
             is_speaking: Arc::new(AtomicBool::new(false)),
-            audio_level: Arc::new(std::sync::atomic::AtomicU8::new(0)),
             vocab_binaries,
         })
     }
@@ -417,13 +433,11 @@ impl VoiceEngine {
             // Uses Arc<Mutex> so reconnection can swap the sender transparently.
             let audio_tx_holder = self.audio_chunk_tx.clone();
             let is_speaking = self.is_speaking.clone();
-            let audio_level = self.audio_level.clone();
 
             device.build_input_stream(
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     if is_speaking.load(Ordering::Relaxed) {
-                        audio_level.store(0, Ordering::Relaxed);
                         return;
                     }
                     let mono16k = if needs_resample {
@@ -431,10 +445,6 @@ impl VoiceEngine {
                     } else {
                         data.to_vec()
                     };
-                    // Compute RMS and map to 0-8 level
-                    let rms = (mono16k.iter().map(|s| s * s).sum::<f32>() / mono16k.len().max(1) as f32).sqrt();
-                    let level = (rms * 80.0).min(8.0) as u8;
-                    audio_level.store(level, Ordering::Relaxed);
 
                     let pcm_bytes = f32_to_i16_bytes(&mono16k);
                     if let Some(ref tx) = *audio_tx_holder.lock().unwrap() {
@@ -451,7 +461,6 @@ impl VoiceEngine {
 
             match voice_mode {
                 VoiceMode::PushToTalk => {
-                    let audio_level = self.audio_level.clone();
                     device.build_input_stream(
                         &config,
                         move |data: &[f32], _: &cpal::InputCallbackInfo| {
@@ -460,9 +469,6 @@ impl VoiceEngine {
                             } else {
                                 data.to_vec()
                             };
-                            let rms = (mono16k.iter().map(|s| s * s).sum::<f32>() / mono16k.len().max(1) as f32).sqrt();
-                            let level = (rms * 80.0).min(8.0) as u8;
-                            audio_level.store(level, Ordering::Relaxed);
 
                             if *is_recording.lock().unwrap() {
                                 buffer.lock().unwrap().extend_from_slice(&mono16k);
@@ -478,13 +484,11 @@ impl VoiceEngine {
                     let event_tx = self.event_tx.clone();
                     let speech_frames = Arc::new(Mutex::new(0u32));
                     let silence_frames = Arc::new(Mutex::new(0u32));
-                    let audio_level = self.audio_level.clone();
 
                     device.build_input_stream(
                         &config,
                         move |data: &[f32], _: &cpal::InputCallbackInfo| {
                             if is_speaking.load(Ordering::Relaxed) {
-                                audio_level.store(0, Ordering::Relaxed);
                                 return;
                             }
 
@@ -495,8 +499,6 @@ impl VoiceEngine {
                             };
 
                             let rms = (mono16k.iter().map(|s| s * s).sum::<f32>() / mono16k.len().max(1) as f32).sqrt();
-                            let level = (rms * 80.0).min(8.0) as u8;
-                            audio_level.store(level, Ordering::Relaxed);
                             let is_speech = rms > ENERGY_THRESHOLD;
 
                             let mut sf = speech_frames.lock().unwrap();

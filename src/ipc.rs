@@ -1,3 +1,10 @@
+//! Unix socket IPC server for `vclaw ctl` commands.
+//!
+//! The daemon listens on a per-session socket at
+//! `~/.local/share/vclaw/<session>.sock`. The `vclaw ctl` thin client
+//! connects, sends a JSON command, and receives a JSON response.
+//! Protocol is line-delimited JSON (one JSON object per line).
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -8,6 +15,7 @@ use tokio::sync::{broadcast, RwLock};
 
 use crate::event::{Event, VoiceStatus};
 
+/// Commands accepted over the IPC socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum IpcCommand {
@@ -19,6 +27,7 @@ pub enum IpcCommand {
     Quit,
 }
 
+/// Response sent back to the `vclaw ctl` client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcResponse {
     pub ok: bool,
@@ -28,12 +37,14 @@ pub struct IpcResponse {
     pub error: Option<String>,
 }
 
+/// Payload for the `status` command response.
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusData {
     pub voice_status: String,
     pub muted: bool,
 }
 
+/// Shared daemon state, read by IPC handlers and written by the daemon loop.
 pub struct SharedState {
     pub voice_status: VoiceStatus,
     pub muted: bool,
@@ -52,6 +63,7 @@ impl Default for SharedState {
     }
 }
 
+/// Compute the IPC socket path for a given session name.
 pub fn socket_path(session_name: &str) -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
@@ -59,6 +71,7 @@ pub fn socket_path(session_name: &str) -> PathBuf {
         .join(format!("{}.sock", session_name))
 }
 
+/// Start the IPC server. Runs forever, accepting connections and dispatching commands.
 pub async fn start_server(
     state: Arc<RwLock<SharedState>>,
     event_tx: broadcast::Sender<Event>,

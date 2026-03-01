@@ -279,13 +279,10 @@ async fn main() -> Result<()> {
 
     // Status bar — runs as its own task with a dedicated event subscription
     let status_bar = status::StatusBar::new(&session_name)?;
-    let status_audio_level = voice_engine.as_ref()
-        .map(|e| e.audio_level.clone())
-        .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicU8::new(0)));
     let mut status_event_rx = bus.subscribe();
     let is_ptt_mode = config.voice.mode == VoiceMode::PushToTalk;
     tokio::spawn(async move {
-        status_bar_task(&mut status_event_rx, &status_bar, &status_audio_level, is_ptt_mode).await;
+        status_bar_task(&mut status_event_rx, &status_bar, is_ptt_mode).await;
     });
 
     // Start IPC server (session-specific socket)
@@ -597,42 +594,24 @@ async fn voice_task(
 async fn status_bar_task(
     event_rx: &mut broadcast::Receiver<Event>,
     status_bar: &status::StatusBar,
-    audio_level: &Arc<std::sync::atomic::AtomicU8>,
     ptt_mode: bool,
 ) {
     let mut voice_status = VoiceStatus::Idle;
     let mut muted = false;
-    let mut level_tick = tokio::time::interval(Duration::from_millis(200));
 
     loop {
-        tokio::select! {
-            result = event_rx.recv() => {
-                match result {
-                    Ok(Event::VoiceStatus(s)) => {
-                        voice_status = s;
-                        let level = audio_level.load(std::sync::atomic::Ordering::Relaxed);
-                        status_bar.update(&voice_status, muted, level, ptt_mode).ok();
-                    }
-                    Ok(Event::MuteToggle) => {
-                        muted = !muted;
-                        let level = audio_level.load(std::sync::atomic::Ordering::Relaxed);
-                        status_bar.update(&voice_status, muted, level, ptt_mode).ok();
-                    }
-                    Ok(Event::Quit) | Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    _ => {}
-                }
+        match event_rx.recv().await {
+            Ok(Event::VoiceStatus(s)) => {
+                voice_status = s;
+                status_bar.update(&voice_status, muted, ptt_mode).ok();
             }
-            _ = level_tick.tick() => {
-                // Only animate volume meter for states where mic input matters
-                match voice_status {
-                    VoiceStatus::Idle | VoiceStatus::Listening => {
-                        let level = audio_level.load(std::sync::atomic::Ordering::Relaxed);
-                        status_bar.update(&voice_status, muted, level, ptt_mode).ok();
-                    }
-                    _ => {}
-                }
+            Ok(Event::MuteToggle) => {
+                muted = !muted;
+                status_bar.update(&voice_status, muted, ptt_mode).ok();
             }
+            Ok(Event::Quit) | Err(broadcast::error::RecvError::Closed) => break,
+            Err(broadcast::error::RecvError::Lagged(_)) => {}
+            _ => {}
         }
     }
 }
@@ -656,9 +635,16 @@ async fn run_daemon_loop(
     jsonl_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut jsonl_path = initial_jsonl_path;
     let mut jsonl_offset = initial_jsonl_offset;
-    // Debounce: only act on WaitingForPermission if seen on consecutive polls
-    let mut pending_permission = false;
-    let mut pending_tool_name = String::new();
+    // Permission debounce state machine:
+    //   None       — no permission prompt detected
+    //   Debouncing — seen once, waiting for second consecutive poll to confirm
+    //   Handled    — approval sent, waiting for Claude Code to move past WaitingForPermission
+    enum PermissionState {
+        None,
+        Debouncing { tool_name: String },
+        Handled,
+    }
+    let mut permission_state = PermissionState::None;
     // Track last known Claude Code state for user message context
     let mut last_claude_state = brain::ClaudeCodeState::Unknown;
     // Debounce JSONL updates: accumulate entries, only act after quiet period
@@ -708,7 +694,7 @@ async fn run_daemon_loop(
                                 let fresh = brain::poll_claude_code_history(project_dir, 0, jsonl_path.as_deref());
                                 jsonl_path = fresh.1;
                                 jsonl_offset = fresh.2;
-                                pending_permission = false;
+                                permission_state = PermissionState::None;
                                 brain_busy = false;
                                 accumulated_entries.clear();
                                 last_activity_time = None;
@@ -757,9 +743,14 @@ async fn run_daemon_loop(
                 jsonl_path = new_path;
                 jsonl_offset = new_offset;
 
-                // When file unchanged and we have a pending permission, confirm it
-                let effective_state = if new_entries.is_empty() && pending_permission {
-                    brain::ClaudeCodeState::WaitingForPermission { tool_name: pending_tool_name.clone() }
+                // When file unchanged and we have a debouncing permission, confirm it
+                let is_debouncing = matches!(permission_state, PermissionState::Debouncing { .. });
+                let effective_state = if new_entries.is_empty() && is_debouncing {
+                    let tool = match &permission_state {
+                        PermissionState::Debouncing { tool_name } => tool_name.clone(),
+                        _ => String::new(),
+                    };
+                    brain::ClaudeCodeState::WaitingForPermission { tool_name: tool }
                 } else {
                     state
                 };
@@ -781,24 +772,39 @@ async fn run_daemon_loop(
 
                 // Skip Working/Unknown — let Claude Code do its thing
                 if matches!(effective_state, brain::ClaudeCodeState::Working | brain::ClaudeCodeState::Unknown) {
-                    if !matches!(effective_state, brain::ClaudeCodeState::Unknown) {
-                        pending_permission = false;
+                    if matches!(effective_state, brain::ClaudeCodeState::Working) {
+                        permission_state = PermissionState::None;
                     }
                     continue;
                 }
 
-                // Debounce permission: first time we see it, just flag it.
-                if matches!(effective_state, brain::ClaudeCodeState::WaitingForPermission { .. }) {
-                    if !pending_permission {
-                        if let brain::ClaudeCodeState::WaitingForPermission { ref tool_name } = effective_state {
-                            pending_tool_name = tool_name.clone();
-                        }
-                        tracing::debug!("Permission state detected, waiting one more poll to confirm");
-                        pending_permission = true;
-                        continue;
+                // Reset when state moves away from WaitingForPermission
+                if !matches!(effective_state, brain::ClaudeCodeState::WaitingForPermission { .. }) {
+                    if matches!(permission_state, PermissionState::Handled) {
+                        permission_state = PermissionState::None;
                     }
-                    // Second consecutive poll — it's really waiting, act now
-                    tracing::info!("Permission confirmed after debounce, acting");
+                }
+
+                // Permission debounce state machine
+                if matches!(effective_state, brain::ClaudeCodeState::WaitingForPermission { .. }) {
+                    match &permission_state {
+                        PermissionState::Handled => {
+                            // Already sent approval — wait for state to change
+                            continue;
+                        }
+                        PermissionState::None => {
+                            // First sighting — enter debounce
+                            if let brain::ClaudeCodeState::WaitingForPermission { ref tool_name } = effective_state {
+                                permission_state = PermissionState::Debouncing { tool_name: tool_name.clone() };
+                            }
+                            tracing::debug!("Permission state detected, waiting one more poll to confirm");
+                            continue;
+                        }
+                        PermissionState::Debouncing { .. } => {
+                            // Second consecutive poll — confirmed, act now
+                            tracing::info!("Permission confirmed after debounce, acting");
+                        }
+                    }
                 } else if matches!(effective_state, brain::ClaudeCodeState::Idle) {
                     // Debounce Idle: wait for 3s of no new JSONL entries before acting
                     // This batches rapid-fire screen changes into one update
@@ -808,7 +814,7 @@ async fn run_daemon_loop(
                                 last_time.elapsed().as_millis());
                             continue;
                         }
-                    } else if accumulated_entries.is_empty() && !pending_permission {
+                    } else if accumulated_entries.is_empty() && !is_debouncing {
                         continue;
                     }
                 }
@@ -823,7 +829,7 @@ async fn run_daemon_loop(
                 let entries_to_send = std::mem::take(&mut accumulated_entries);
                 last_activity_time = None;
 
-                if entries_to_send.is_empty() && !pending_permission {
+                if entries_to_send.is_empty() && !is_debouncing {
                     continue;
                 }
 
@@ -842,13 +848,18 @@ async fn run_daemon_loop(
                 );
                 brain.add_user_message(&msg);
 
+                let was_permission = matches!(effective_state, brain::ClaudeCodeState::WaitingForPermission { .. });
                 brain_busy = true;
                 interruptible_brain_response(
                     brain, tmux_ctrl, tts_client, audio_player, event_tx,
                     &active_pane_id, false,
                 ).await.ok();
                 brain_busy = false;
-                pending_permission = false;
+                permission_state = if was_permission {
+                    PermissionState::Handled
+                } else {
+                    PermissionState::None
+                };
             }
         }
     }

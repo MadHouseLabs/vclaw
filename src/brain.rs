@@ -1,9 +1,19 @@
+//! Claude API client, JSONL transcript monitoring, and prompt construction.
+//!
+//! The "brain" is vclaw's interface to the Claude Messages API. It:
+//! - Manages a rolling conversation history (max 10 messages)
+//! - Streams responses via SSE and dispatches tool calls
+//! - Monitors Claude Code's JSONL transcript to detect permission prompts,
+//!   completion, and errors
+//! - Constructs the system prompt with project context and Claude Code history
+
 use anyhow::Result;
 use futures::StreamExt;
 use reqwest::Client;
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde::{Deserialize, Serialize};
 
+/// A tool definition sent to the Claude API.
 #[derive(Debug, Serialize, Clone)]
 pub struct ToolDefinition {
     pub name: String,
@@ -13,18 +23,21 @@ pub struct ToolDefinition {
     pub cache_control: Option<CacheControl>,
 }
 
+/// Cache control hint for Anthropic's prompt caching.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CacheControl {
     #[serde(rename = "type")]
     pub control_type: String,
 }
 
+/// A message in the Claude API conversation history.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub role: String,
     pub content: serde_json::Value,
 }
 
+/// A content block in an assistant response (text or tool use).
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "type")]
 pub enum ContentBlock {
@@ -38,6 +51,7 @@ pub enum ContentBlock {
     },
 }
 
+/// Parsed SSE events from the Claude streaming API.
 #[derive(Debug)]
 pub enum StreamEvent {
     ContentBlockStart {
@@ -63,6 +77,7 @@ pub enum StreamEvent {
     Done,
 }
 
+/// Check if a user request warrants the more expensive "complex" model.
 pub fn is_complex_request(user_said: &str) -> bool {
     let lower = user_said.to_lowercase();
     let complex_keywords = [
@@ -73,6 +88,8 @@ pub fn is_complex_request(user_said: &str) -> bool {
     complex_keywords.iter().any(|k| lower.contains(k))
 }
 
+/// Build the tool definitions sent to the Claude API.
+/// Currently defines `shell_input` (type into Claude Code) and `speak` (TTS).
 pub fn build_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
@@ -142,8 +159,16 @@ pub enum ClaudeCodeState {
     Unknown,
 }
 
-/// Parse JSONL lines into human-readable conversation entries.
-/// Also tracks the last significant entry type for state detection.
+/// Parse JSONL lines into human-readable conversation entries and detect
+/// Claude Code's current state.
+///
+/// State detection works by tracking the last "significant" event — user
+/// messages, assistant text/tool_use, and tool_results. Transient events
+/// like `progress` and `file-history-snapshot` are ignored because they
+/// don't indicate a conversation state change.
+///
+/// The key insight: if the last significant event is `tool_use` with no
+/// subsequent `tool_result`, Claude Code is waiting for permission approval.
 fn parse_jsonl_entries(content: &str) -> (Vec<String>, ClaudeCodeState) {
     let mut entries = Vec::new();
     // Track last significant event for state detection
@@ -252,7 +277,11 @@ fn parse_jsonl_entries(content: &str) -> (Vec<String>, ClaudeCodeState) {
         }
     }
 
-    // Determine state from last significant conversation event
+    // Determine state from last significant conversation event:
+    //   tool_use → WaitingForPermission (no tool_result followed)
+    //   end_turn → Idle (model explicitly said it's done)
+    //   assistant_text with text → Idle (model responded without tools)
+    //   tool_result or user → Working (Claude Code is processing)
     let state = match last_event {
         Some(("tool_use", "assistant")) => {
             ClaudeCodeState::WaitingForPermission { tool_name: last_tool_name }
@@ -368,6 +397,7 @@ pub fn poll_claude_code_history(
     (summary, Some(path), file_size, state)
 }
 
+/// Build the system prompt with vclaw's persona, rules, and project context.
 pub fn build_system_prompt(claude_md: &str, claude_code_history: &str) -> String {
     let project_context = if claude_md.is_empty() && claude_code_history.is_empty() {
         String::new()
@@ -457,6 +487,7 @@ User command → you MUST call shell_input + speak. Not just speak. Both. Always
     format!("{}{}", base_prompt, project_context)
 }
 
+/// Build a user message from transcribed speech, including Claude Code state hints.
 pub fn build_user_message(user_said: &str, pane_id: &str, claude_state: &ClaudeCodeState) -> String {
     let state_note = match claude_state {
         ClaudeCodeState::Idle => " Claude Code is IDLE — send your prompt now.",
@@ -470,6 +501,8 @@ pub fn build_user_message(user_said: &str, pane_id: &str, claude_state: &ClaudeC
     )
 }
 
+/// Build a message updating the brain about Claude Code's recent activity.
+/// Includes new JSONL entries, current screen content, and state-specific hints.
 pub fn build_history_update_message(new_entries: &str, state: &ClaudeCodeState, screen_content: Option<&str>) -> String {
     let screen_section = match screen_content {
         Some(content) if !content.trim().is_empty() => {
@@ -497,6 +530,10 @@ pub fn build_history_update_message(new_entries: &str, state: &ClaudeCodeState, 
     )
 }
 
+/// Claude API client with conversation management and streaming.
+///
+/// Maintains a rolling conversation history, constructs API requests with
+/// prompt caching, and streams responses as [`StreamEvent`]s.
 pub struct Brain {
     client: Client,
     token: String,

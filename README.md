@@ -13,8 +13,8 @@ vclaw listens to your voice, enriches your commands with project context, types 
 - **Voice input** via ElevenLabs realtime STT (streaming) or local Whisper (offline)
 - **Voice output** via ElevenLabs TTS with streaming playback and interrupt support
 - **Claude-powered prompt enrichment** — brief voice commands become detailed, context-aware prompts
-- **Automatic permission handling** — approves Claude Code's tool-use prompts with spoken confirmation
-- **tmux status bar** with live voice status indicator (waveform animation while listening)
+- **Automatic permission handling** — approves Claude Code's tool-use prompts with debounced confirmation
+- **tmux status bar** with live voice state indicator (ready, listening, thinking, speaking, muted)
 - **IPC control** — mute, interrupt, toggle voice, view conversation from any terminal
 - **Key bindings** — F12 push-to-talk / interrupt, Alt-M mute, Prefix-C conversation popup
 - **Per-project sessions** — each directory gets its own tmux session and daemon
@@ -26,6 +26,7 @@ vclaw listens to your voice, enriches your commands with project context, types 
 - [tmux](https://github.com/tmux/tmux)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed
 - Rust toolchain (for building from source)
+- cmake (required by whisper-rs C bindings)
 
 ## Installation
 
@@ -38,6 +39,18 @@ Or build directly:
 ```sh
 cargo build --release
 # Binary at target/release/vclaw
+```
+
+### Build dependencies
+
+whisper-rs compiles the Whisper C++ library from source, which requires cmake:
+
+```sh
+# macOS
+brew install cmake
+
+# Linux (Debian/Ubuntu)
+sudo apt install cmake build-essential
 ```
 
 ### Whisper model (local STT only)
@@ -81,6 +94,7 @@ vclaw ctl status               # Query daemon status
 vclaw ctl mute                 # Toggle mute
 vclaw ctl interrupt            # Interrupt current action
 vclaw ctl conversation         # View conversation history
+vclaw ctl quit                 # Stop the daemon
 ```
 
 ### Key bindings (inside tmux)
@@ -124,15 +138,60 @@ max_context_lines = 50
 
 ## Architecture
 
-Monolithic Rust binary with async event bus (tokio broadcast channels):
+Monolithic Rust binary with async event bus (tokio broadcast channels). See [docs/architecture.md](docs/architecture.md) for details.
 
-- **Voice Engine** — audio capture (cpal), STT (ElevenLabs WebSocket or local Whisper), VAD
-- **Brain** — Claude API client with streaming, tool definitions, prompt caching, conversation management
-- **Tmux Controller** — session management, pane capture, key sending, status bar
-- **TTS** — ElevenLabs streaming text-to-speech
-- **Audio Player** — rodio MP3 playback with interrupt support
-- **IPC** — Unix socket server for `vclaw ctl` commands
-- **Status Bar** — tmux status-right integration with voice state visualization
+```
+                    ┌──────────────┐
+                    │  Event Bus   │
+                    │ (broadcast)  │
+                    └──┬──┬──┬──┬─┘
+         ┌─────────────┘  │  │  └─────────────┐
+         v                v  v                v
+  ┌────────────┐  ┌──────────────┐  ┌──────────────┐
+  │   Voice    │  │    Brain     │  │    Status    │
+  │  Engine    │  │ (Claude API) │  │     Bar      │
+  └────────────┘  └──────┬───────┘  └──────────────┘
+                         │
+                  ┌──────┴───────┐
+                  │     Tmux     │
+                  │  Controller  │
+                  └──────────────┘
+```
+
+Modules:
+
+- **Voice Engine** (`voice.rs`) — audio capture (cpal), STT (ElevenLabs WebSocket or local Whisper), VAD
+- **Brain** (`brain.rs`) — Claude API client with streaming, tool definitions, prompt caching, JSONL transcript monitoring
+- **Tmux Controller** (`tmux.rs`) — session management, pane capture, key sending, status bar config
+- **TTS** (`tts.rs`) — ElevenLabs streaming text-to-speech
+- **Audio Player** (`audio.rs`) — rodio MP3 playback with interrupt support
+- **IPC** (`ipc.rs`) — Unix socket server for `vclaw ctl` commands
+- **Status Bar** (`status.rs`) — push-based tmux status-right integration with voice state
+- **Auth** (`auth.rs`) — OAuth PKCE flow and API key management
+- **Config** (`config.rs`) — TOML config loading and CLI argument parsing
+- **Event** (`event.rs`) — event types and broadcast bus
+
+## File locations
+
+| Path | Purpose |
+|------|---------|
+| `~/.config/vclaw/config.toml` | Configuration |
+| `~/.config/vclaw/credentials.toml` | API keys and OAuth tokens |
+| `~/.local/share/vclaw/models/` | Cached Whisper models |
+| `~/.local/share/vclaw/logs/` | Per-session log files (daily rotation, max 5) |
+| `~/.local/share/vclaw/<session>.sock` | IPC Unix socket (per-session) |
+
+## Troubleshooting
+
+**"No input device available"** — vclaw can't find a microphone. Check System Settings > Privacy > Microphone. Terminal apps may need explicit permission.
+
+**Voice not responding** — Check that the ElevenLabs API key is set. Without it, STT is disabled in realtime mode. Run `vclaw ctl status` to see current state.
+
+**Status bar not updating** — The status bar uses `tmux set-option` + `refresh-client`. If you're attached to a session started by an older vclaw binary, detach and reattach (`vclaw attach`) to pick up the new binary.
+
+**Permission prompts repeating** — vclaw debounces permission handling (waits for 2 consecutive JSONL polls to confirm). If Claude Code is rapidly cycling through permissions, vclaw may lag. This is by design to prevent accidental double-approvals.
+
+**Logs** — Check `~/.local/share/vclaw/logs/` for per-session log files. Set `RUST_LOG=vclaw=debug` for verbose logging.
 
 ## License
 

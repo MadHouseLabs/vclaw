@@ -1,3 +1,12 @@
+//! Authentication: OAuth PKCE flow and API key management.
+//!
+//! Supports two auth methods for the Anthropic API:
+//! - **Direct API key** — stored in `~/.config/vclaw/credentials.toml`
+//! - **OAuth** — browser-based PKCE flow with automatic token refresh
+//!
+//! Environment variable `ANTHROPIC_API_KEY` always takes priority over
+//! stored credentials. ElevenLabs key is stored alongside Anthropic creds.
+
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::Rng;
@@ -10,6 +19,7 @@ const SCOPE: &str = "org:create_api_key user:profile user:inference";
 const REDIRECT_URI: &str = "https://console.anthropic.com/oauth/code/callback";
 const TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
 
+/// Stored credentials (serialized to TOML).
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Credentials {
     #[serde(default)]
@@ -134,7 +144,7 @@ pub fn start_oauth() -> Result<String> {
 }
 
 /// Complete OAuth flow: exchange code for tokens.
-/// code_string format: "<code>#<state>" where state is the PKCE verifier.
+/// `code_string` format: `"<authorization_code>#<pkce_state>"` where state is the PKCE verifier.
 pub async fn complete_oauth(code_string: &str) -> Result<()> {
     let (code, verifier) = code_string
         .split_once('#')
