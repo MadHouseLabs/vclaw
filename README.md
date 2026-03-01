@@ -76,25 +76,13 @@ If using the Whisper STT provider, vclaw automatically downloads the model on fi
 
 ## Authentication
 
-vclaw needs an Anthropic API key (for the brain) and optionally an ElevenLabs API key (for voice).
+On first run, vclaw opens a browser for Anthropic OAuth login:
 
-**Environment variables** (simplest):
 ```sh
-export ANTHROPIC_API_KEY="sk-..."
-export ELEVENLABS_API_KEY="..."
+vclaw auth
 ```
 
-**OAuth** (interactive):
-```sh
-vclaw auth          # Opens browser for Anthropic OAuth
-```
-
-**Direct API key**:
-```sh
-vclaw auth --api-key sk-ant-...
-```
-
-On first run without credentials, vclaw prompts for authentication interactively. ElevenLabs key is optional — without it, vclaw runs in text-only mode (no voice output).
+ElevenLabs key is optional — without it, vclaw runs in text-only mode (no voice output).
 
 Credentials are stored in `~/.config/vclaw/credentials.toml`.
 
