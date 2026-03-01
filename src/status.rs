@@ -13,22 +13,6 @@ pub struct StatusBar {
     path: std::path::PathBuf,
 }
 
-/// Center-out voice bar: grows symmetrically from the middle based on audio level.
-/// Uses block characters for a smooth waveform look.
-fn center_bars(level: u8) -> &'static str {
-    match level.min(8) {
-        0 => "    \u{2502}    ",       // just center line
-        1 => "   \u{2581}\u{2502}\u{2581}   ",
-        2 => "  \u{2581}\u{2582}\u{2502}\u{2582}\u{2581}  ",
-        3 => " \u{2581}\u{2582}\u{2583}\u{2502}\u{2583}\u{2582}\u{2581} ",
-        4 => "\u{2581}\u{2582}\u{2583}\u{2584}\u{2502}\u{2584}\u{2583}\u{2582}\u{2581}",
-        5 => "\u{2582}\u{2583}\u{2584}\u{2585}\u{2502}\u{2585}\u{2584}\u{2583}\u{2582}",
-        6 => "\u{2583}\u{2584}\u{2585}\u{2586}\u{2502}\u{2586}\u{2585}\u{2584}\u{2583}",
-        7 => "\u{2584}\u{2585}\u{2586}\u{2587}\u{2502}\u{2587}\u{2586}\u{2585}\u{2584}",
-        _ => "\u{2585}\u{2586}\u{2587}\u{2588}\u{2502}\u{2588}\u{2587}\u{2586}\u{2585}",
-    }
-}
-
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -59,11 +43,10 @@ impl StatusBar {
                     }
                 }
                 VoiceStatus::Listening => {
-                    let bars = center_bars(audio_level);
-                    if audio_level > 0 {
-                        format!("#[fg=colour114]{}", bars)
+                    if audio_level > 2 {
+                        "#[fg=colour114,bold]\u{25c6} listening".to_string()
                     } else {
-                        format!("#[fg=colour114]    \u{2502}    ")
+                        "#[fg=colour114]\u{25c7} listening".to_string()
                     }
                 }
                 VoiceStatus::Thinking => {
