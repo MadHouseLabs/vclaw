@@ -270,18 +270,18 @@ fn parse_jsonl_entries(content: &str) -> (Vec<String>, ClaudeCodeState) {
 }
 
 /// Read the most recent Claude Code JSONL transcript and extract a summary
-/// of recent conversation. Returns (summary_text, file_size for future polling).
-pub fn load_claude_code_history(project_dir: &str) -> (String, u64) {
+/// of recent conversation. Returns (summary_text, file_path, file_size).
+pub fn load_claude_code_history(project_dir: &str) -> (String, Option<std::path::PathBuf>, u64) {
     let path = match find_latest_jsonl(project_dir) {
         Some(p) => p,
-        None => return (String::new(), 0),
+        None => return (String::new(), None, 0),
     };
 
     tracing::info!("Loading Claude Code history from: {:?}", path);
 
     let file = match std::fs::File::open(&path) {
         Ok(f) => f,
-        Err(_) => return (String::new(), 0),
+        Err(_) => return (String::new(), None, 0),
     };
     let file_size = file.metadata().ok().map(|m| m.len()).unwrap_or(0);
 
@@ -316,30 +316,44 @@ pub fn load_claude_code_history(project_dir: &str) -> (String, u64) {
         recent.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
     };
 
-    (summary, file_size)
+    (summary, Some(path), file_size)
 }
 
 /// Poll for new JSONL entries since `last_offset`.
-/// Returns (new_entries_text, new_offset, claude_code_state).
-pub fn poll_claude_code_history(project_dir: &str, last_offset: u64) -> (String, u64, ClaudeCodeState) {
+/// `last_path` tracks which file we were reading — if the latest file changes
+/// (new Claude Code session), we reset to offset 0 so we don't miss the start.
+/// Returns (new_entries_text, new_path, new_offset, claude_code_state).
+pub fn poll_claude_code_history(
+    project_dir: &str,
+    last_offset: u64,
+    last_path: Option<&std::path::Path>,
+) -> (String, Option<std::path::PathBuf>, u64, ClaudeCodeState) {
     let path = match find_latest_jsonl(project_dir) {
         Some(p) => p,
-        None => return (String::new(), last_offset, ClaudeCodeState::Unknown),
+        None => return (String::new(), None, last_offset, ClaudeCodeState::Unknown),
     };
 
     let file = match std::fs::File::open(&path) {
         Ok(f) => f,
-        Err(_) => return (String::new(), last_offset, ClaudeCodeState::Unknown),
+        Err(_) => return (String::new(), Some(path), last_offset, ClaudeCodeState::Unknown),
     };
     let file_size = file.metadata().ok().map(|m| m.len()).unwrap_or(0);
 
-    if file_size <= last_offset {
-        return (String::new(), last_offset, ClaudeCodeState::Unknown);
+    // If the file changed (new Claude Code session), reset offset to read from start
+    let effective_offset = if last_path.map_or(true, |lp| lp != path) {
+        tracing::info!("JSONL file changed to {:?}, resetting offset (was {})", path, last_offset);
+        0
+    } else {
+        last_offset
+    };
+
+    if file_size <= effective_offset {
+        return (String::new(), Some(path), effective_offset, ClaudeCodeState::Unknown);
     }
 
     use std::io::{Read, Seek, SeekFrom};
     let mut file = file;
-    let _ = file.seek(SeekFrom::Start(last_offset));
+    let _ = file.seek(SeekFrom::Start(effective_offset));
     let mut buf = String::new();
     let _ = file.read_to_string(&mut buf);
 
@@ -351,7 +365,7 @@ pub fn poll_claude_code_history(project_dir: &str, last_offset: u64) -> (String,
         entries.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
     };
 
-    (summary, file_size, state)
+    (summary, Some(path), file_size, state)
 }
 
 pub fn build_system_prompt(claude_md: &str, claude_code_history: &str) -> String {

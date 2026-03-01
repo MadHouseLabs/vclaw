@@ -246,7 +246,7 @@ async fn main() -> Result<()> {
     };
     // Load Claude Code's conversation history from its JSONL transcript
     let project_dir = cwd.to_string_lossy().replace('/', "-");
-    let (claude_code_history, jsonl_offset) = brain::load_claude_code_history(&project_dir);
+    let (claude_code_history, jsonl_path, jsonl_offset) = brain::load_claude_code_history(&project_dir);
     let mut brain = brain::Brain::new(
         anthropic_token,
         config.brain.model.clone(),
@@ -320,6 +320,7 @@ async fn main() -> Result<()> {
             &config,
             &daemon_state,
             &project_dir,
+            jsonl_path,
             jsonl_offset,
         ).await
     });
@@ -644,11 +645,13 @@ async fn run_daemon_loop(
     config: &Config,
     shared_state: &Arc<RwLock<SharedState>>,
     project_dir: &str,
+    initial_jsonl_path: Option<std::path::PathBuf>,
     initial_jsonl_offset: u64,
 ) -> Result<()> {
     // Poll Claude Code's JSONL transcript for new entries
     let mut jsonl_tick = tokio::time::interval(Duration::from_secs(1));
     jsonl_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut jsonl_path = initial_jsonl_path;
     let mut jsonl_offset = initial_jsonl_offset;
     // Debounce: only act on WaitingForPermission if seen on consecutive polls
     let mut pending_permission = false;
@@ -699,8 +702,9 @@ async fn run_daemon_loop(
                                 tmux_ctrl.send_raw_key(&active_pane_id, "Escape").await.ok();
                                 tmux_ctrl.send_raw_key(&active_pane_id, "C-c").await.ok();
                                 let _ = event_tx.send(Event::VoiceStatus(VoiceStatus::Idle));
-                                let fresh = brain::poll_claude_code_history(project_dir, 0);
-                                jsonl_offset = fresh.1;
+                                let fresh = brain::poll_claude_code_history(project_dir, 0, jsonl_path.as_deref());
+                                jsonl_path = fresh.1;
+                                jsonl_offset = fresh.2;
                                 pending_permission = false;
                                 brain_busy = false;
                                 accumulated_entries.clear();
@@ -746,7 +750,8 @@ async fn run_daemon_loop(
 
             // Poll Claude Code's JSONL for new activity
             _ = jsonl_tick.tick() => {
-                let (new_entries, new_offset, state) = brain::poll_claude_code_history(project_dir, jsonl_offset);
+                let (new_entries, new_path, new_offset, state) = brain::poll_claude_code_history(project_dir, jsonl_offset, jsonl_path.as_deref());
+                jsonl_path = new_path;
                 jsonl_offset = new_offset;
 
                 // When file unchanged and we have a pending permission, confirm it
