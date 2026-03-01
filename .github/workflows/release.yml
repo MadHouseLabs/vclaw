@@ -22,6 +22,8 @@ jobs:
             target: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
 
@@ -42,15 +44,19 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Rename binary
-        run: |
-          cp target/${{ matrix.target }}/release/vclaw vclaw-${{ matrix.target }}
+      - name: Rename binary (Unix)
+        if: runner.os != 'Windows'
+        run: cp target/${{ matrix.target }}/release/vclaw vclaw-${{ matrix.target }}
+
+      - name: Rename binary (Windows)
+        if: runner.os == 'Windows'
+        run: cp target/${{ matrix.target }}/release/vclaw.exe vclaw-${{ matrix.target }}.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: vclaw-${{ matrix.target }}
-          path: vclaw-${{ matrix.target }}
+          path: vclaw-${{ matrix.target }}*
 
   release:
     needs: build
