@@ -72,12 +72,18 @@ impl StatusBar {
                     }
                 }
                 VoiceStatus::Listening => {
-                    // 3-diamond level meter: ◇◇◇ → ◆◇◇ → ◆◆◇ → ◆◆◆
+                    // 3-diamond level meter with color contrast:
+                    //   active  ◆ = bright green (colour114, bold)
+                    //   inactive ◇ = dim grey (colour245)
                     // audio_level 0–8; speech typically 3–7
-                    let d1 = if audio_level > 2 { "\u{25c6}" } else { "\u{25c7}" };
-                    let d2 = if audio_level > 4 { "\u{25c6}" } else { "\u{25c7}" };
-                    let d3 = if audio_level > 6 { "\u{25c6}" } else { "\u{25c7}" };
-                    format!("#[fg=colour114]{}{}{}", d1, d2, d3)
+                    let d = |thresh: u8| -> &str {
+                        if audio_level > thresh {
+                            "#[fg=colour114,bold]\u{25c6}"
+                        } else {
+                            "#[fg=colour245]\u{25c7}"
+                        }
+                    };
+                    format!("{}{}{}", d(2), d(4), d(6))
                 }
                 VoiceStatus::Thinking => {
                     "#[fg=colour221,bold]\u{25c6} thinking".to_string()
