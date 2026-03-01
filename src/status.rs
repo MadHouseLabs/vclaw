@@ -13,6 +13,29 @@ pub struct StatusBar {
     path: std::path::PathBuf,
 }
 
+// Status bar design system
+//
+// Format:  icon + space + label   (all states except Listening)
+// Listening uses a 3-diamond level meter without a label.
+//
+// Icons:
+//   ◇  outline diamond — inactive / waiting
+//   ◆  filled diamond  — active / doing something
+//   ●  filled circle   — muted (intentionally distinct from diamond family)
+//
+// Colors (tmux colour numbers):
+//   245  grey       — inactive states (starting, idle PTT)
+//   114  green      — voice-active states (ready, listening)
+//   221  yellow     — processing (thinking)
+//   117  blue       — output (speaking)
+//   203  red        — muted
+//
+// Bold: active states that represent work in progress (thinking, speaking, muted).
+//
+// audio_level is 0–8 (computed as rms * 80, capped at 8 in voice.rs).
+// Typical speech sits around 3–7, so diamond thresholds are spread
+// across that range: >2 / >4 / >6.
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -26,7 +49,7 @@ impl StatusBar {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&path, "#[fg=colour245,dim]\u{25c7} starting")?;
+        std::fs::write(&path, "#[fg=colour245]\u{25c7} starting")?;
         Ok(Self { path })
     }
 
@@ -44,9 +67,10 @@ impl StatusBar {
                 }
                 VoiceStatus::Listening => {
                     // 3-diamond level meter: ◇◇◇ → ◆◇◇ → ◆◆◇ → ◆◆◆
-                    let d1 = if audio_level > 1 { "\u{25c6}" } else { "\u{25c7}" };
-                    let d2 = if audio_level > 3 { "\u{25c6}" } else { "\u{25c7}" };
-                    let d3 = if audio_level > 5 { "\u{25c6}" } else { "\u{25c7}" };
+                    // audio_level 0–8; speech typically 3–7
+                    let d1 = if audio_level > 2 { "\u{25c6}" } else { "\u{25c7}" };
+                    let d2 = if audio_level > 4 { "\u{25c6}" } else { "\u{25c7}" };
+                    let d3 = if audio_level > 6 { "\u{25c6}" } else { "\u{25c7}" };
                     format!("#[fg=colour114]{}{}{}", d1, d2, d3)
                 }
                 VoiceStatus::Thinking => {
