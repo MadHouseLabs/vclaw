@@ -14,7 +14,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
-const CLIENT_ID: &str = "REDACTED_OAUTH_CLIENT_ID";
+/// Injected at compile time via `ANTHROPIC_OAUTH_CLIENT_ID` env var.
+/// Falls back to a development placeholder if not set.
+const CLIENT_ID: &str = match option_env!("ANTHROPIC_OAUTH_CLIENT_ID") {
+    Some(id) => id,
+    None => "MISSING_OAUTH_CLIENT_ID",
+};
 const SCOPE: &str = "org:create_api_key user:profile user:inference";
 const REDIRECT_URI: &str = "https://console.anthropic.com/oauth/code/callback";
 const TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
