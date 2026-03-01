@@ -43,11 +43,11 @@ impl StatusBar {
                     }
                 }
                 VoiceStatus::Listening => {
-                    if audio_level > 2 {
-                        "#[fg=colour114,bold]\u{25c6} listening".to_string()
-                    } else {
-                        "#[fg=colour114]\u{25c7} listening".to_string()
-                    }
+                    // 3-diamond level meter: ◇◇◇ → ◆◇◇ → ◆◆◇ → ◆◆◆
+                    let d1 = if audio_level > 1 { "\u{25c6}" } else { "\u{25c7}" };
+                    let d2 = if audio_level > 3 { "\u{25c6}" } else { "\u{25c7}" };
+                    let d3 = if audio_level > 5 { "\u{25c6}" } else { "\u{25c7}" };
+                    format!("#[fg=colour114]{}{}{}", d1, d2, d3)
                 }
                 VoiceStatus::Thinking => {
                     "#[fg=colour221,bold]\u{25c6} thinking".to_string()
