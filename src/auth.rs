@@ -82,10 +82,7 @@ pub fn is_authenticated() -> bool {
     if std::env::var("ANTHROPIC_API_KEY").is_ok() {
         return true;
     }
-    load_credentials()
-        .ok()
-        .and_then(|c| c.auth_type)
-        .is_some()
+    load_credentials().ok().and_then(|c| c.auth_type).is_some()
 }
 
 /// Store a direct API key.
@@ -136,9 +133,7 @@ pub fn start_oauth() -> Result<String> {
     println!("If the browser doesn't open, visit:\n{}\n", auth_url);
 
     // Open browser (macOS)
-    let _ = std::process::Command::new("open")
-        .arg(&auth_url)
-        .spawn();
+    let _ = std::process::Command::new("open").arg(&auth_url).spawn();
 
     Ok(verifier)
 }
@@ -177,7 +172,10 @@ pub async fn complete_oauth(code_string: &str) -> Result<()> {
         anyhow::bail!("Token exchange failed: {}", body);
     }
 
-    let t: TokenResponse = resp.json().await.context("Failed to parse token response")?;
+    let t: TokenResponse = resp
+        .json()
+        .await
+        .context("Failed to parse token response")?;
 
     let creds = Credentials {
         auth_type: Some("oauth".into()),
@@ -199,8 +197,7 @@ pub async fn get_valid_token() -> Result<(String, bool)> {
     }
 
     let creds = load_credentials().context("Failed to load credentials")?;
-    let auth_type = creds.auth_type.as_deref()
-        .context("Not authenticated")?;
+    let auth_type = creds.auth_type.as_deref().context("Not authenticated")?;
 
     match auth_type {
         "api_key" => {
@@ -248,7 +245,10 @@ async fn refresh_token(refresh: &str) -> Result<(String, bool)> {
         anyhow::bail!("Token refresh failed: {}", body);
     }
 
-    let t: TokenResponse = resp.json().await.context("Failed to parse refresh response")?;
+    let t: TokenResponse = resp
+        .json()
+        .await
+        .context("Failed to parse refresh response")?;
 
     let creds = Credentials {
         auth_type: Some("oauth".into()),

@@ -51,7 +51,8 @@ impl ElevenLabsClient {
             }
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("xi-api-key", &self.api_key)
             .header("Content-Type", "application/json")

@@ -17,13 +17,13 @@
 //! - [`config`] — TOML config loading and CLI argument parsing
 //! - [`event`] — Event types and broadcast bus connecting all components
 
-pub mod auth;
 pub mod audio;
+pub mod auth;
+pub mod brain;
 pub mod config;
 pub mod event;
 pub mod ipc;
-pub mod tmux;
-pub mod brain;
-pub mod tts;
 pub mod status;
+pub mod tmux;
+pub mod tts;
 pub mod voice;

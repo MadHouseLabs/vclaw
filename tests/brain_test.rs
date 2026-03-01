@@ -1,4 +1,6 @@
-use vclaw::brain::{build_tool_definitions, build_system_prompt, build_user_message, ClaudeCodeState};
+use vclaw::brain::{
+    build_system_prompt, build_tool_definitions, build_user_message, ClaudeCodeState,
+};
 
 #[test]
 fn test_tool_definitions_structure() {

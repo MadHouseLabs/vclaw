@@ -1,5 +1,5 @@
-use vclaw::auth::{Credentials, generate_pkce};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use vclaw::auth::{generate_pkce, Credentials};
 
 #[test]
 fn test_credentials_save_load_api_key() {
@@ -57,12 +57,16 @@ fn test_credentials_save_load_oauth() {
 async fn test_get_token_prefers_env_var() {
     // Set the env var for this test
     let key = "test-env-key-for-auth-test";
-    unsafe { std::env::set_var("ANTHROPIC_API_KEY", key); }
+    unsafe {
+        std::env::set_var("ANTHROPIC_API_KEY", key);
+    }
 
     let result = vclaw::auth::get_valid_token().await;
 
     // Clean up before asserting
-    unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
+    unsafe {
+        std::env::remove_var("ANTHROPIC_API_KEY");
+    }
 
     let (token, is_oauth) = result.unwrap();
     assert_eq!(token, key);
