@@ -21,12 +21,18 @@ pub struct AudioPlayer {
     active_sink: Arc<Mutex<Option<Arc<Sink>>>>,
 }
 
-impl AudioPlayer {
-    pub fn new() -> Self {
+impl Default for AudioPlayer {
+    fn default() -> Self {
         Self {
             interrupted: Arc::new(AtomicBool::new(false)),
             active_sink: Arc::new(Mutex::new(None)),
         }
+    }
+}
+
+impl AudioPlayer {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Stop any currently playing audio immediately.

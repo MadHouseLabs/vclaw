@@ -81,9 +81,19 @@ pub enum StreamEvent {
 pub fn is_complex_request(user_said: &str) -> bool {
     let lower = user_said.to_lowercase();
     let complex_keywords = [
-        "explain", "debug", "why", "how does", "refactor",
-        "review", "analyze", "architecture", "design", "compare",
-        "difference between", "what is", "help me understand",
+        "explain",
+        "debug",
+        "why",
+        "how does",
+        "refactor",
+        "review",
+        "analyze",
+        "architecture",
+        "design",
+        "compare",
+        "difference between",
+        "what is",
+        "help me understand",
     ];
     complex_keywords.iter().any(|k| lower.contains(k))
 }
@@ -141,7 +151,8 @@ pub fn find_latest_jsonl(project_dir: &str) -> Option<std::path::PathBuf> {
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map(|x| x == "jsonl").unwrap_or(false))
         .collect();
-    jsonl_files.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
+    jsonl_files
+        .sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
 
     jsonl_files.first().map(|f| f.path())
 }
@@ -183,16 +194,22 @@ fn parse_jsonl_entries(content: &str) -> (Vec<String>, ClaudeCodeState) {
         };
 
         let msg_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        let role = v.pointer("/message/role").and_then(|r| r.as_str()).unwrap_or("");
+        let role = v
+            .pointer("/message/role")
+            .and_then(|r| r.as_str())
+            .unwrap_or("");
 
         match (msg_type, role) {
             ("user", "user") => {
                 // Check if this is a tool_result
-                let is_tool_result = v.pointer("/message/content")
+                let is_tool_result = v
+                    .pointer("/message/content")
                     .and_then(|c| c.as_array())
-                    .map(|arr| arr.iter().any(|item| {
-                        item.get("type").and_then(|t| t.as_str()) == Some("tool_result")
-                    }))
+                    .map(|arr| {
+                        arr.iter().any(|item| {
+                            item.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                        })
+                    })
                     .unwrap_or(false);
 
                 if is_tool_result {
@@ -224,7 +241,8 @@ fn parse_jsonl_entries(content: &str) -> (Vec<String>, ClaudeCodeState) {
                 }
             }
             ("assistant", "assistant") => {
-                let stop = v.pointer("/message/stop_reason")
+                let stop = v
+                    .pointer("/message/stop_reason")
                     .or_else(|| v.get("stop_reason"))
                     .and_then(|s| s.as_str())
                     .unwrap_or("");
@@ -250,13 +268,15 @@ fn parse_jsonl_entries(content: &str) -> (Vec<String>, ClaudeCodeState) {
                                 }
                             }
                             "tool_use" => {
-                                last_tool_name = item.get("name")
+                                last_tool_name = item
+                                    .get("name")
                                     .and_then(|n| n.as_str())
                                     .unwrap_or("unknown")
                                     .to_string();
                                 last_event = Some(("tool_use", "assistant"));
                                 last_assistant_had_text = false;
-                                entries.push(format!("Claude Code: [using tool: {}]", last_tool_name));
+                                entries
+                                    .push(format!("Claude Code: [using tool: {}]", last_tool_name));
                             }
                             // Skip thinking blocks — internal reasoning, not a state change
                             "thinking" => {}
@@ -283,13 +303,11 @@ fn parse_jsonl_entries(content: &str) -> (Vec<String>, ClaudeCodeState) {
     //   assistant_text with text → Idle (model responded without tools)
     //   tool_result or user → Working (Claude Code is processing)
     let state = match last_event {
-        Some(("tool_use", "assistant")) => {
-            ClaudeCodeState::WaitingForPermission { tool_name: last_tool_name }
-        }
+        Some(("tool_use", "assistant")) => ClaudeCodeState::WaitingForPermission {
+            tool_name: last_tool_name,
+        },
         Some(("end_turn", "assistant")) => ClaudeCodeState::Idle,
-        Some(("assistant_text", "assistant")) if last_assistant_had_text => {
-            ClaudeCodeState::Idle
-        }
+        Some(("assistant_text", "assistant")) if last_assistant_had_text => ClaudeCodeState::Idle,
         Some(("tool_result", "user")) => ClaudeCodeState::Working,
         Some(("user", "user")) => ClaudeCodeState::Working,
         _ => ClaudeCodeState::Unknown,
@@ -316,7 +334,7 @@ pub fn load_claude_code_history(project_dir: &str) -> (String, Option<std::path:
 
     // Read last ~100KB
     let content = {
-        let read_from = if file_size > 100_000 { file_size - 100_000 } else { 0 };
+        let read_from = file_size.saturating_sub(100_000);
         use std::io::{Read, Seek, SeekFrom};
         let mut file = file;
         let _ = file.seek(SeekFrom::Start(read_from));
@@ -342,7 +360,11 @@ pub fn load_claude_code_history(project_dir: &str) -> (String, Option<std::path:
     let summary = if recent.is_empty() {
         String::new()
     } else {
-        recent.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+        recent
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
     (summary, Some(path), file_size)
@@ -364,20 +386,36 @@ pub fn poll_claude_code_history(
 
     let file = match std::fs::File::open(&path) {
         Ok(f) => f,
-        Err(_) => return (String::new(), Some(path), last_offset, ClaudeCodeState::Unknown),
+        Err(_) => {
+            return (
+                String::new(),
+                Some(path),
+                last_offset,
+                ClaudeCodeState::Unknown,
+            )
+        }
     };
     let file_size = file.metadata().ok().map(|m| m.len()).unwrap_or(0);
 
     // If the file changed (new Claude Code session), reset offset to read from start
-    let effective_offset = if last_path.map_or(true, |lp| lp != path) {
-        tracing::info!("JSONL file changed to {:?}, resetting offset (was {})", path, last_offset);
+    let effective_offset = if last_path.is_none_or(|lp| lp != path) {
+        tracing::info!(
+            "JSONL file changed to {:?}, resetting offset (was {})",
+            path,
+            last_offset
+        );
         0
     } else {
         last_offset
     };
 
     if file_size <= effective_offset {
-        return (String::new(), Some(path), effective_offset, ClaudeCodeState::Unknown);
+        return (
+            String::new(),
+            Some(path),
+            effective_offset,
+            ClaudeCodeState::Unknown,
+        );
     }
 
     use std::io::{Read, Seek, SeekFrom};
@@ -391,7 +429,11 @@ pub fn poll_claude_code_history(
     let summary = if entries.is_empty() {
         String::new()
     } else {
-        entries.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+        entries
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
     (summary, Some(path), file_size, state)
@@ -404,7 +446,10 @@ pub fn build_system_prompt(claude_md: &str, claude_code_history: &str) -> String
     } else {
         let mut ctx = String::new();
         if !claude_md.is_empty() {
-            ctx.push_str(&format!("\n\nProject context from CLAUDE.md:\n{}", claude_md));
+            ctx.push_str(&format!(
+                "\n\nProject context from CLAUDE.md:\n{}",
+                claude_md
+            ));
         }
         if !claude_code_history.is_empty() {
             ctx.push_str(&format!("\n\nRecent Claude Code conversation (use this to understand what the user has been working on):\n{}", claude_code_history));
@@ -488,7 +533,11 @@ User command → you MUST call shell_input + speak. Not just speak. Both. Always
 }
 
 /// Build a user message from transcribed speech, including Claude Code state hints.
-pub fn build_user_message(user_said: &str, pane_id: &str, claude_state: &ClaudeCodeState) -> String {
+pub fn build_user_message(
+    user_said: &str,
+    pane_id: &str,
+    claude_state: &ClaudeCodeState,
+) -> String {
     let state_note = match claude_state {
         ClaudeCodeState::Idle => " Claude Code is IDLE — send your prompt now.",
         ClaudeCodeState::Working => " Claude Code is busy but can queue input — send your prompt now anyway.",
@@ -503,7 +552,11 @@ pub fn build_user_message(user_said: &str, pane_id: &str, claude_state: &ClaudeC
 
 /// Build a message updating the brain about Claude Code's recent activity.
 /// Includes new JSONL entries, current screen content, and state-specific hints.
-pub fn build_history_update_message(new_entries: &str, state: &ClaudeCodeState, screen_content: Option<&str>) -> String {
+pub fn build_history_update_message(
+    new_entries: &str,
+    state: &ClaudeCodeState,
+    screen_content: Option<&str>,
+) -> String {
     let screen_section = match screen_content {
         Some(content) if !content.trim().is_empty() => {
             format!("\n\n[Current screen]\n{}", content)
@@ -546,10 +599,19 @@ pub struct Brain {
 }
 
 impl Brain {
-    pub fn new(token: String, model: String, complex_model: String, is_oauth: bool, claude_md: &str, claude_code_history: &str) -> Self {
+    pub fn new(
+        token: String,
+        model: String,
+        complex_model: String,
+        is_oauth: bool,
+        claude_md: &str,
+        claude_code_history: &str,
+    ) -> Self {
         let mut tools = build_tool_definitions();
         if let Some(last) = tools.last_mut() {
-            last.cache_control = Some(CacheControl { control_type: "ephemeral".into() });
+            last.cache_control = Some(CacheControl {
+                control_type: "ephemeral".into(),
+            });
         }
 
         Self {
@@ -566,10 +628,12 @@ impl Brain {
 
     /// Check if a message content is a tool_result (array with type: tool_result items).
     fn is_tool_result_message(content: &serde_json::Value) -> bool {
-        content.as_array()
-            .map(|arr| arr.iter().any(|item| {
-                item.get("type").and_then(|t| t.as_str()) == Some("tool_result")
-            }))
+        content
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .any(|item| item.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
+            })
             .unwrap_or(false)
     }
 
@@ -657,7 +721,8 @@ impl Brain {
             "messages": self.messages,
         });
 
-        let mut builder = self.client
+        let mut builder = self
+            .client
             .post("https://api.anthropic.com/v1/messages")
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json");
@@ -665,7 +730,10 @@ impl Brain {
         if self.is_oauth {
             builder = builder
                 .header("authorization", format!("Bearer {}", self.token))
-                .header("anthropic-beta", "prompt-caching-2024-07-31,oauth-2025-04-20");
+                .header(
+                    "anthropic-beta",
+                    "prompt-caching-2024-07-31,oauth-2025-04-20",
+                );
         } else {
             builder = builder
                 .header("x-api-key", &self.token)
@@ -683,21 +751,11 @@ impl Brain {
                     Ok(SseEvent::Open) => {}
                     Ok(SseEvent::Message(msg)) => {
                         let parsed = match msg.event.as_str() {
-                            "content_block_start" => {
-                                Self::parse_block_start(&msg.data)
-                            }
-                            "content_block_delta" => {
-                                Self::parse_block_delta(&msg.data)
-                            }
-                            "content_block_stop" => {
-                                Self::parse_block_stop(&msg.data)
-                            }
-                            "message_delta" => {
-                                Self::parse_message_delta(&msg.data)
-                            }
-                            "message_stop" => {
-                                Some(StreamEvent::Done)
-                            }
+                            "content_block_start" => Self::parse_block_start(&msg.data),
+                            "content_block_delta" => Self::parse_block_delta(&msg.data),
+                            "content_block_stop" => Self::parse_block_stop(&msg.data),
+                            "message_delta" => Self::parse_message_delta(&msg.data),
+                            "message_stop" => Some(StreamEvent::Done),
                             _ => None,
                         };
 
@@ -736,7 +794,12 @@ impl Brain {
         let block_type = cb["type"].as_str()?.to_string();
         let id = cb["id"].as_str().map(|s| s.to_string());
         let name = cb["name"].as_str().map(|s| s.to_string());
-        Some(StreamEvent::ContentBlockStart { index, block_type, id, name })
+        Some(StreamEvent::ContentBlockStart {
+            index,
+            block_type,
+            id,
+            name,
+        })
     }
 
     fn parse_block_delta(data: &str) -> Option<StreamEvent> {
@@ -750,7 +813,10 @@ impl Brain {
             }
             "input_json_delta" => {
                 let partial_json = delta["partial_json"].as_str()?.to_string();
-                Some(StreamEvent::InputJsonDelta { index, partial_json })
+                Some(StreamEvent::InputJsonDelta {
+                    index,
+                    partial_json,
+                })
             }
             _ => None,
         }
@@ -767,5 +833,4 @@ impl Brain {
         let stop_reason = v["delta"]["stop_reason"].as_str()?.to_string();
         Some(StreamEvent::MessageDelta { stop_reason })
     }
-
 }

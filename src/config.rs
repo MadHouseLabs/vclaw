@@ -56,7 +56,7 @@ pub struct BrainConfig {
 }
 
 /// Top-level application configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub voice: VoiceConfig,
@@ -66,14 +66,30 @@ pub struct Config {
     pub brain: BrainConfig,
 }
 
-fn default_voice_mode() -> VoiceMode { VoiceMode::PushToTalk }
-fn default_whisper_model() -> String { "base".into() }
-fn default_stt_provider() -> SttProvider { SttProvider::Elevenlabs }
-fn default_voice_id() -> String { "cgSgspJ2msm6clMCkdW9".into() }
-fn default_tts_model_id() -> String { "eleven_turbo_v2".into() }
-fn default_model() -> String { "claude-sonnet-4-6".into() }
-fn default_complex_model() -> String { "claude-sonnet-4-6".into() }
-fn default_max_context_lines() -> usize { 50 }
+fn default_voice_mode() -> VoiceMode {
+    VoiceMode::PushToTalk
+}
+fn default_whisper_model() -> String {
+    "base".into()
+}
+fn default_stt_provider() -> SttProvider {
+    SttProvider::Elevenlabs
+}
+fn default_voice_id() -> String {
+    "cgSgspJ2msm6clMCkdW9".into()
+}
+fn default_tts_model_id() -> String {
+    "eleven_turbo_v2".into()
+}
+fn default_model() -> String {
+    "claude-sonnet-4-6".into()
+}
+fn default_complex_model() -> String {
+    "claude-sonnet-4-6".into()
+}
+fn default_max_context_lines() -> usize {
+    50
+}
 impl Default for VoiceConfig {
     fn default() -> Self {
         Self {
@@ -85,28 +101,25 @@ impl Default for VoiceConfig {
 }
 impl Default for TtsConfig {
     fn default() -> Self {
-        Self { voice_id: default_voice_id(), model_id: default_tts_model_id() }
+        Self {
+            voice_id: default_voice_id(),
+            model_id: default_tts_model_id(),
+        }
     }
 }
 impl Default for BrainConfig {
     fn default() -> Self {
-        Self { model: default_model(), complex_model: default_complex_model(), max_context_lines: default_max_context_lines() }
-    }
-}
-impl Default for Config {
-    fn default() -> Self {
         Self {
-            voice: VoiceConfig::default(),
-            tts: TtsConfig::default(),
-            brain: BrainConfig::default(),
+            model: default_model(),
+            complex_model: default_complex_model(),
+            max_context_lines: default_max_context_lines(),
         }
     }
 }
 
 impl Config {
     pub fn load() -> Result<Self> {
-        let config_path = dirs::config_dir()
-            .map(|d| d.join("vclaw").join("config.toml"));
+        let config_path = dirs::config_dir().map(|d| d.join("vclaw").join("config.toml"));
 
         match config_path {
             Some(path) if path.exists() => Self::from_file(&path),

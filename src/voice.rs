@@ -13,6 +13,8 @@
 //! - **AlwaysOn** — local RMS-based VAD triggers batch transcription
 //! - **PushToTalk** — F12 key starts/stops recording, then batch transcription
 
+use crate::config::{SttProvider, VoiceMode};
+use crate::event::{Event, VoiceStatus};
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -23,8 +25,6 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use crate::config::{SttProvider, VoiceMode};
-use crate::event::{Event, VoiceStatus};
 
 /// Minimum audio length in samples at 16kHz (1 second).
 const MIN_AUDIO_SAMPLES: usize = 16000;
@@ -45,7 +45,9 @@ impl SuppressStderr {
                     if let Ok(devnull) = std::fs::File::open("/dev/null") {
                         libc::dup2(devnull.into_raw_fd(), 2);
                     }
-                    return Self { saved_fd: Some(saved) };
+                    return Self {
+                        saved_fd: Some(saved),
+                    };
                 }
             }
         }
@@ -92,7 +94,8 @@ pub async fn ensure_model(model_name: &str) -> Result<PathBuf> {
 
     println!("Downloading whisper model '{}'...", model_name);
 
-    let response = reqwest::get(&url).await
+    let response = reqwest::get(&url)
+        .await
         .context("Failed to start model download")?;
 
     let total_size = response.content_length().unwrap_or(0);
@@ -109,7 +112,12 @@ pub async fn ensure_model(model_name: &str) -> Result<PathBuf> {
         downloaded += chunk.len() as u64;
         if total_size > 0 {
             let pct = (downloaded as f64 / total_size as f64 * 100.0) as u32;
-            print!("\rDownloading... {}% ({}/{}MB)", pct, downloaded / 1_000_000, total_size / 1_000_000);
+            print!(
+                "\rDownloading... {}% ({}/{}MB)",
+                pct,
+                downloaded / 1_000_000,
+                total_size / 1_000_000
+            );
             std::io::stdout().flush().ok();
         }
     }
@@ -212,7 +220,10 @@ pub struct VoiceEngine {
 
 impl VoiceEngine {
     /// Create a voice engine with ElevenLabs STT (no local model needed).
-    pub fn new_elevenlabs(elevenlabs_key: String, event_tx: broadcast::Sender<Event>) -> Result<Self> {
+    pub fn new_elevenlabs(
+        elevenlabs_key: String,
+        event_tx: broadcast::Sender<Event>,
+    ) -> Result<Self> {
         let (speech_done_tx, speech_done_rx) = tokio::sync::mpsc::channel(8);
         let vocab_binaries = collect_path_binaries();
         tracing::info!("ElevenLabs STT engine created");
@@ -278,8 +289,7 @@ impl VoiceEngine {
         *self.audio_chunk_tx.lock().unwrap() = Some(audio_tx);
         let (disconnect_tx, disconnect_rx) = tokio::sync::mpsc::channel::<()>(1);
 
-        let url = format!(
-            "wss://api.elevenlabs.io/v1/speech-to-text/realtime?\
+        let url = "wss://api.elevenlabs.io/v1/speech-to-text/realtime?\
              model_id=scribe_v2_realtime&\
              language_code=en&\
              audio_format=pcm_16000&\
@@ -287,19 +297,22 @@ impl VoiceEngine {
              vad_silence_threshold_secs=1.0&\
              vad_threshold=0.3&\
              min_speech_duration_ms=300&\
-             min_silence_duration_ms=200"
-        );
+             min_silence_duration_ms=200";
 
-        let mut request = url.into_client_request()
+        let mut request = url
+            .into_client_request()
             .context("Failed to build WebSocket request")?;
 
         request.headers_mut().insert(
             "xi-api-key",
-            self.elevenlabs_key.parse().context("Invalid API key header")?,
+            self.elevenlabs_key
+                .parse()
+                .context("Invalid API key header")?,
         );
 
         tracing::info!("Connecting to ElevenLabs realtime STT WebSocket...");
-        let (ws_stream, _) = tokio_tungstenite::connect_async(request).await
+        let (ws_stream, _) = tokio_tungstenite::connect_async(request)
+            .await
             .context("Failed to connect to ElevenLabs realtime WebSocket")?;
         tracing::info!("ElevenLabs realtime WebSocket connected");
 
@@ -339,23 +352,31 @@ impl VoiceEngine {
                             let msg_type = json["message_type"].as_str().unwrap_or("");
                             match msg_type {
                                 "session_started" => {
-                                    tracing::info!("Realtime STT session started: {}", json["session_id"]);
+                                    tracing::info!(
+                                        "Realtime STT session started: {}",
+                                        json["session_id"]
+                                    );
                                 }
                                 "partial_transcript" => {
                                     let text = json["text"].as_str().unwrap_or("").to_string();
                                     if !text.is_empty() {
-                                        let _ = event_tx.send(Event::VoiceStatus(VoiceStatus::Listening));
+                                        let _ = event_tx
+                                            .send(Event::VoiceStatus(VoiceStatus::Listening));
                                         let _ = event_tx.send(Event::LiveTranscript(text));
                                     }
                                 }
                                 "committed_transcript" | "committed_transcript_with_timestamps" => {
-                                    let text = json["text"].as_str().unwrap_or("").trim().to_string();
+                                    let text =
+                                        json["text"].as_str().unwrap_or("").trim().to_string();
                                     if !text.is_empty() && text != last_committed {
                                         tracing::info!("Realtime STT: {:?}", text);
                                         let _ = event_tx.send(Event::UserSaid(text.clone()));
                                         last_committed = text;
                                     } else if text == last_committed {
-                                        tracing::debug!("Skipping duplicate committed transcript: {:?}", text);
+                                        tracing::debug!(
+                                            "Skipping duplicate committed transcript: {:?}",
+                                            text
+                                        );
                                     }
                                 }
                                 "error" | "auth_error" | "quota_exceeded" | "rate_limited" => {
@@ -394,7 +415,8 @@ impl VoiceEngine {
     /// For Whisper/PushToTalk, buffers locally with VAD.
     pub fn start_capture(&self, voice_mode: &VoiceMode) -> Result<cpal::Stream> {
         let host = cpal::default_host();
-        let device = host.default_input_device()
+        let device = host
+            .default_input_device()
             .context("No input device available")?;
 
         let (config, native_rate, native_channels) = {
@@ -403,25 +425,33 @@ impl VoiceEngine {
                 sample_rate: cpal::SampleRate(16000),
                 buffer_size: cpal::BufferSize::Default,
             };
-            if device.supported_input_configs()
-                .map(|mut cfgs| cfgs.any(|r| {
-                    r.channels() >= 1
-                        && r.min_sample_rate().0 <= 16000
-                        && r.max_sample_rate().0 >= 16000
-                }))
+            if device
+                .supported_input_configs()
+                .map(|mut cfgs| {
+                    cfgs.any(|r| {
+                        r.channels() >= 1
+                            && r.min_sample_rate().0 <= 16000
+                            && r.max_sample_rate().0 >= 16000
+                    })
+                })
                 .unwrap_or(false)
             {
                 (ideal, 16000u32, 1u16)
             } else {
-                let default = device.default_input_config()
+                let default = device
+                    .default_input_config()
                     .context("No supported input config")?;
                 let rate = default.sample_rate().0;
                 let ch = default.channels();
-                (cpal::StreamConfig {
-                    channels: ch,
-                    sample_rate: default.sample_rate(),
-                    buffer_size: cpal::BufferSize::Default,
-                }, rate, ch)
+                (
+                    cpal::StreamConfig {
+                        channels: ch,
+                        sample_rate: default.sample_rate(),
+                        buffer_size: cpal::BufferSize::Default,
+                    },
+                    rate,
+                    ch,
+                )
             }
         };
 
@@ -460,24 +490,22 @@ impl VoiceEngine {
             let is_recording = self.is_recording.clone();
 
             match voice_mode {
-                VoiceMode::PushToTalk => {
-                    device.build_input_stream(
-                        &config,
-                        move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                            let mono16k = if needs_resample {
-                                resample_to_16k_mono(data, native_rate, native_channels)
-                            } else {
-                                data.to_vec()
-                            };
+                VoiceMode::PushToTalk => device.build_input_stream(
+                    &config,
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        let mono16k = if needs_resample {
+                            resample_to_16k_mono(data, native_rate, native_channels)
+                        } else {
+                            data.to_vec()
+                        };
 
-                            if *is_recording.lock().unwrap() {
-                                buffer.lock().unwrap().extend_from_slice(&mono16k);
-                            }
-                        },
-                        |err| tracing::error!("Audio capture error: {}", err),
-                        None,
-                    )?
-                }
+                        if *is_recording.lock().unwrap() {
+                            buffer.lock().unwrap().extend_from_slice(&mono16k);
+                        }
+                    },
+                    |err| tracing::error!("Audio capture error: {}", err),
+                    None,
+                )?,
                 VoiceMode::AlwaysOn => {
                     let speech_done_tx = self.speech_done_tx.clone();
                     let is_speaking = self.is_speaking.clone();
@@ -498,7 +526,9 @@ impl VoiceEngine {
                                 data.to_vec()
                             };
 
-                            let rms = (mono16k.iter().map(|s| s * s).sum::<f32>() / mono16k.len().max(1) as f32).sqrt();
+                            let rms = (mono16k.iter().map(|s| s * s).sum::<f32>()
+                                / mono16k.len().max(1) as f32)
+                                .sqrt();
                             let is_speech = rms > ENERGY_THRESHOLD;
 
                             let mut sf = speech_frames.lock().unwrap();
@@ -511,7 +541,8 @@ impl VoiceEngine {
                                 if !*rec && *sf >= MIN_SPEECH_FRAMES {
                                     *rec = true;
                                     buffer.lock().unwrap().clear();
-                                    let _ = event_tx.send(Event::VoiceStatus(VoiceStatus::Listening));
+                                    let _ =
+                                        event_tx.send(Event::VoiceStatus(VoiceStatus::Listening));
                                 }
                             } else {
                                 *silf += 1;
@@ -540,7 +571,9 @@ impl VoiceEngine {
     pub fn start_recording(&self) {
         self.audio_buffer.lock().unwrap().clear();
         *self.is_recording.lock().unwrap() = true;
-        let _ = self.event_tx.send(Event::VoiceStatus(VoiceStatus::Listening));
+        let _ = self
+            .event_tx
+            .send(Event::VoiceStatus(VoiceStatus::Listening));
     }
 
     pub fn stop_recording(&self) {
@@ -555,7 +588,9 @@ impl VoiceEngine {
     /// Transcribe using the configured STT provider (batch mode only).
     /// Used for Whisper and PushToTalk. Not used for realtime mode.
     pub async fn transcribe(&self) -> Result<String> {
-        let _ = self.event_tx.send(Event::VoiceStatus(VoiceStatus::Thinking));
+        let _ = self
+            .event_tx
+            .send(Event::VoiceStatus(VoiceStatus::Thinking));
 
         let mut audio = self.audio_buffer.lock().unwrap().clone();
         if audio.is_empty() {
@@ -573,15 +608,19 @@ impl VoiceEngine {
     }
 
     fn transcribe_whisper(&self, audio: &[f32]) -> Result<String> {
-        let ctx = self.whisper_ctx.as_ref()
+        let ctx = self
+            .whisper_ctx
+            .as_ref()
             .context("Whisper context not initialized")?;
 
         let _stderr_guard = SuppressStderr::new();
 
-        let mut state = ctx.create_state()
+        let mut state = ctx
+            .create_state()
             .context("Failed to create Whisper state")?;
 
-        let mut params = whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
+        let mut params =
+            whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
         params.set_language(Some("en"));
         params.set_print_special(false);
         params.set_print_progress(false);
@@ -590,10 +629,12 @@ impl VoiceEngine {
         let vocab_prompt: String = self.vocab_binaries.join(", ");
         params.set_initial_prompt(&vocab_prompt);
 
-        state.full(params, audio)
+        state
+            .full(params, audio)
             .context("Whisper transcription failed")?;
 
-        let num_segments = state.full_n_segments()
+        let num_segments = state
+            .full_n_segments()
             .context("Failed to get segment count")?;
 
         let mut text = String::new();
@@ -609,8 +650,11 @@ impl VoiceEngine {
     async fn transcribe_elevenlabs(&self, audio: &[f32]) -> Result<String> {
         let wav_bytes = encode_wav(audio);
 
-        tracing::info!("ElevenLabs batch STT: {} samples ({:.1}s)",
-            audio.len(), audio.len() as f32 / 16000.0);
+        tracing::info!(
+            "ElevenLabs batch STT: {} samples ({:.1}s)",
+            audio.len(),
+            audio.len() as f32 / 16000.0
+        );
 
         let file_part = reqwest::multipart::Part::bytes(wav_bytes)
             .file_name("audio.wav")
@@ -622,7 +666,8 @@ impl VoiceEngine {
             .text("tag_audio_events", "false")
             .part("file", file_part);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post("https://api.elevenlabs.io/v1/speech-to-text")
             .header("xi-api-key", &self.elevenlabs_key)
             .multipart(form)
@@ -638,8 +683,8 @@ impl VoiceEngine {
             anyhow::bail!("ElevenLabs STT error {}: {}", status, body);
         }
 
-        let json: serde_json::Value = serde_json::from_str(&body)
-            .context("Failed to parse ElevenLabs STT response")?;
+        let json: serde_json::Value =
+            serde_json::from_str(&body).context("Failed to parse ElevenLabs STT response")?;
 
         let text = json["text"].as_str().unwrap_or("").trim().to_string();
         tracing::info!("ElevenLabs STT result: {:?}", text);
@@ -650,7 +695,8 @@ impl VoiceEngine {
 /// Downmix to mono and resample to 16kHz using linear interpolation.
 fn resample_to_16k_mono(data: &[f32], src_rate: u32, channels: u16) -> Vec<f32> {
     let ch = channels as usize;
-    let mono: Vec<f32> = data.chunks(ch)
+    let mono: Vec<f32> = data
+        .chunks(ch)
         .map(|frame| frame.iter().sum::<f32>() / ch as f32)
         .collect();
 

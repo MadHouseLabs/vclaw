@@ -1,12 +1,12 @@
-mod auth;
 mod audio;
+mod auth;
+mod brain;
 mod config;
 mod event;
 mod ipc;
-mod tmux;
-mod brain;
-mod tts;
 mod status;
+mod tmux;
+mod tts;
 mod voice;
 
 use anyhow::Result;
@@ -28,12 +28,20 @@ use std::os::unix::process::CommandExt;
 ///      /Users/karthik/dev/my-app -> "vclaw-my-app"
 fn session_name_for_cwd() -> String {
     let cwd = std::env::current_dir().unwrap_or_default();
-    let dir_name = cwd.file_name()
+    let dir_name = cwd
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("default");
     // tmux doesn't allow dots or colons in session names
-    let sanitized: String = dir_name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+    let sanitized: String = dir_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     format!("vclaw-{}", sanitized)
 }
@@ -60,9 +68,7 @@ async fn main() -> Result<()> {
     let (non_blocking, _log_guard) = tracing_appender::non_blocking(file_appender);
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            tracing_subscriber::EnvFilter::new("vclaw=debug,warn")
-        });
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("vclaw=debug,warn"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(non_blocking)
@@ -178,59 +184,72 @@ async fn main() -> Result<()> {
     let event_tx = bus.sender();
 
     // Initialize voice engine based on STT provider
-    let (voice_engine, speech_rx, ws_disconnect_rx): (
+    type VoiceInit = (
         Option<Arc<VoiceEngine>>,
         Option<tokio::sync::mpsc::Receiver<()>>,
         Option<tokio::sync::mpsc::Receiver<()>>,
-    ) = match config.voice.stt_provider {
-            config::SttProvider::Elevenlabs => {
-                match VoiceEngine::new_elevenlabs(elevenlabs_key.clone(), event_tx.clone()) {
-                    Ok(mut engine) => {
-                        if config.voice.mode == VoiceMode::PushToTalk {
-                            // PTT uses batch transcription — no realtime WebSocket needed.
-                            let rx = engine.take_speech_rx();
-                            (Some(Arc::new(engine)), rx, None)
-                        } else {
-                            // AlwaysOn: start realtime WebSocket for streaming STT
-                            match engine.start_realtime_stream().await {
-                                Ok(disconnect_rx) => {
-                                    let rx = engine.take_speech_rx();
-                                    (Some(Arc::new(engine)), rx, Some(disconnect_rx))
-                                }
-                                Err(e) => {
-                                    eprintln!("Warning: realtime STT init failed ({}). Starting without voice.", e);
-                                    (None, None, None)
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: voice engine init failed ({}). Starting without voice.", e);
-                        (None, None, None)
-                    }
-                }
-            }
-            config::SttProvider::Whisper => {
-                match voice::ensure_model(&config.voice.whisper_model).await {
-                    Ok(model_path) => {
-                        match VoiceEngine::new_whisper(model_path.to_str().unwrap_or_default(), event_tx.clone()) {
-                            Ok(mut engine) => {
+    );
+    let (voice_engine, speech_rx, ws_disconnect_rx): VoiceInit = match config.voice.stt_provider {
+        config::SttProvider::Elevenlabs => {
+            match VoiceEngine::new_elevenlabs(elevenlabs_key.clone(), event_tx.clone()) {
+                Ok(mut engine) => {
+                    if config.voice.mode == VoiceMode::PushToTalk {
+                        // PTT uses batch transcription — no realtime WebSocket needed.
+                        let rx = engine.take_speech_rx();
+                        (Some(Arc::new(engine)), rx, None)
+                    } else {
+                        // AlwaysOn: start realtime WebSocket for streaming STT
+                        match engine.start_realtime_stream().await {
+                            Ok(disconnect_rx) => {
                                 let rx = engine.take_speech_rx();
-                                (Some(Arc::new(engine)), rx, None)
+                                (Some(Arc::new(engine)), rx, Some(disconnect_rx))
                             }
                             Err(e) => {
-                                eprintln!("Warning: voice engine init failed ({}). Starting without voice.", e);
+                                eprintln!("Warning: realtime STT init failed ({}). Starting without voice.", e);
                                 (None, None, None)
                             }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("Warning: model download failed ({}). Starting without voice.", e);
-                        (None, None, None)
-                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: voice engine init failed ({}). Starting without voice.",
+                        e
+                    );
+                    (None, None, None)
                 }
             }
-        };
+        }
+        config::SttProvider::Whisper => {
+            match voice::ensure_model(&config.voice.whisper_model).await {
+                Ok(model_path) => {
+                    match VoiceEngine::new_whisper(
+                        model_path.to_str().unwrap_or_default(),
+                        event_tx.clone(),
+                    ) {
+                        Ok(mut engine) => {
+                            let rx = engine.take_speech_rx();
+                            (Some(Arc::new(engine)), rx, None)
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: voice engine init failed ({}). Starting without voice.",
+                                e
+                            );
+                            (None, None, None)
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: model download failed ({}). Starting without voice.",
+                        e
+                    );
+                    (None, None, None)
+                }
+            }
+        }
+    };
 
     // Initialize tmux session (per-directory)
     let cwd = std::env::current_dir().unwrap_or_default();
@@ -251,14 +270,19 @@ async fn main() -> Result<()> {
         if local.exists() {
             std::fs::read_to_string(local).unwrap_or_default()
         } else if let Some(ref p) = home {
-            if p.exists() { std::fs::read_to_string(p).unwrap_or_default() } else { String::new() }
+            if p.exists() {
+                std::fs::read_to_string(p).unwrap_or_default()
+            } else {
+                String::new()
+            }
         } else {
             String::new()
         }
     };
     // Load Claude Code's conversation history from its JSONL transcript
     let project_dir = cwd.to_string_lossy().replace('/', "-");
-    let (claude_code_history, jsonl_path, jsonl_offset) = brain::load_claude_code_history(&project_dir);
+    let (claude_code_history, jsonl_path, jsonl_offset) =
+        brain::load_claude_code_history(&project_dir);
     let mut brain = brain::Brain::new(
         anthropic_token,
         config.brain.model.clone(),
@@ -304,7 +328,15 @@ async fn main() -> Result<()> {
         let voice_event_tx = event_tx.clone();
         let voice_event_rx = bus.subscribe();
         let voice_audio_player = audio_player.clone();
-        tokio::spawn(voice_task(engine, voice_mode, speech_rx, voice_event_tx, voice_event_rx, ws_disconnect_rx, voice_audio_player));
+        tokio::spawn(voice_task(
+            engine,
+            voice_mode,
+            speech_rx,
+            voice_event_tx,
+            voice_event_rx,
+            ws_disconnect_rx,
+            voice_audio_player,
+        ));
     }
 
     // Spawn tmux attach as a child process — user interacts directly with tmux
@@ -331,7 +363,8 @@ async fn main() -> Result<()> {
             &project_dir,
             jsonl_path,
             jsonl_offset,
-        ).await
+        )
+        .await
     });
 
     // Wait for either child exit (user detached) or signals
@@ -373,7 +406,8 @@ async fn voice_task(
 
     // Start audio capture on a dedicated thread (cpal::Stream is !Send)
     let (stream_stop_tx, stream_stop_rx) = std::sync::mpsc::channel::<()>();
-    let (capture_ready_tx, capture_ready_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+    let (capture_ready_tx, capture_ready_rx) =
+        tokio::sync::oneshot::channel::<Result<(), String>>();
     let capture_engine = engine.clone();
     let capture_mode = voice_mode.clone();
     let stream_thread = std::thread::spawn(move || {
@@ -559,10 +593,16 @@ async fn voice_task(
                                 let _ = event_tx.send(Event::VoiceStatus(VoiceStatus::Idle));
                             }
                         }
-                    } else if matches!(current_status, VoiceStatus::Speaking | VoiceStatus::Thinking) {
+                    } else if matches!(
+                        current_status,
+                        VoiceStatus::Speaking | VoiceStatus::Thinking
+                    ) {
                         // F12 while speaking/processing = interrupt, don't start recording
                         let _ = event_tx.send(Event::Interrupt);
-                        tracing::info!("F12 interrupt: was {:?}, sending interrupt", current_status);
+                        tracing::info!(
+                            "F12 interrupt: was {:?}, sending interrupt",
+                            current_status
+                        );
                     } else {
                         // Idle — start recording
                         audio_player.interrupt();
@@ -616,7 +656,7 @@ async fn status_bar_task(
     }
 }
 
-#[allow(unused_assignments)]
+#[allow(unused_assignments, clippy::too_many_arguments)]
 async fn run_daemon_loop(
     event_rx: &mut broadcast::Receiver<Event>,
     event_tx: &broadcast::Sender<Event>,
@@ -656,7 +696,9 @@ async fn run_daemon_loop(
     let mut brain_busy = false;
 
     // Find active pane ID once for shell_input
-    let active_pane_id = tmux_ctrl.list_panes().await
+    let active_pane_id = tmux_ctrl
+        .list_panes()
+        .await
         .unwrap_or_default()
         .iter()
         .find(|p| p.active)
@@ -779,10 +821,10 @@ async fn run_daemon_loop(
                 }
 
                 // Reset when state moves away from WaitingForPermission
-                if !matches!(effective_state, brain::ClaudeCodeState::WaitingForPermission { .. }) {
-                    if matches!(permission_state, PermissionState::Handled) {
-                        permission_state = PermissionState::None;
-                    }
+                if !matches!(effective_state, brain::ClaudeCodeState::WaitingForPermission { .. })
+                    && matches!(permission_state, PermissionState::Handled)
+                {
+                    permission_state = PermissionState::None;
                 }
 
                 // Permission debounce state machine
@@ -945,7 +987,12 @@ async fn handle_brain_response(
 
         while let Some(event) = rx.recv().await {
             match event {
-                brain::StreamEvent::ContentBlockStart { index, block_type, id, name } => {
+                brain::StreamEvent::ContentBlockStart {
+                    index,
+                    block_type,
+                    id,
+                    name,
+                } => {
                     // Ensure blocks vec is large enough
                     while blocks.len() <= index {
                         blocks.push(BlockAccum {
@@ -967,7 +1014,10 @@ async fn handle_brain_response(
                         let _ = event_tx.send(Event::LiveTranscript(block.text.clone()));
                     }
                 }
-                brain::StreamEvent::InputJsonDelta { index, partial_json } => {
+                brain::StreamEvent::InputJsonDelta {
+                    index,
+                    partial_json,
+                } => {
                     if let Some(block) = blocks.get_mut(index) {
                         block.json_buf.push_str(&partial_json);
                     }
@@ -988,8 +1038,14 @@ async fn handle_brain_response(
                                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
                             let result = execute_tool(
-                                &tool_name, &input, tmux_ctrl, tts_client, audio_player, event_tx,
-                            ).await;
+                                &tool_name,
+                                &input,
+                                tmux_ctrl,
+                                tts_client,
+                                audio_player,
+                                event_tx,
+                            )
+                            .await;
                             let (result_text, is_error) = match result {
                                 Ok(t) => (t, false),
                                 Err(e) => (e.to_string(), true),
@@ -1006,7 +1062,11 @@ async fn handle_brain_response(
         }
 
         // If stream produced no content, the API likely returned an error (e.g. 400).
-        if blocks.is_empty() || (blocks.iter().all(|b| b.text.is_empty() && b.json_buf.is_empty())) {
+        if blocks.is_empty()
+            || (blocks
+                .iter()
+                .all(|b| b.text.is_empty() && b.json_buf.is_empty()))
+        {
             if loop_iteration == 1 {
                 // First call failed — clear history to recover
                 tracing::warn!("Brain returned empty response, clearing history to recover");
@@ -1024,7 +1084,9 @@ async fn handle_brain_response(
         for block in &blocks {
             match block.block_type.as_str() {
                 "text" => {
-                    content_blocks.push(brain::ContentBlock::Text { text: block.text.clone() });
+                    content_blocks.push(brain::ContentBlock::Text {
+                        text: block.text.clone(),
+                    });
                 }
                 "tool_use" => {
                     let input: serde_json::Value = serde_json::from_str(&block.json_buf)
@@ -1050,9 +1112,11 @@ async fn handle_brain_response(
 
         // Stop if: no tools used, model said end_turn, or only tools were speak/shell_input
         // (after sending a prompt + speaking, there's nothing to follow up on)
-        let only_terminal_tools = tool_results.len() > 0 && blocks.iter().all(|b| {
-            b.block_type != "tool_use" || matches!(b.name.as_deref(), Some("speak") | Some("shell_input"))
-        });
+        let only_terminal_tools = !tool_results.is_empty()
+            && blocks.iter().all(|b| {
+                b.block_type != "tool_use"
+                    || matches!(b.name.as_deref(), Some("speak") | Some("shell_input"))
+            });
         if tool_results.is_empty() || stop_reason == "end_turn" || only_terminal_tools {
             break;
         }
@@ -1074,7 +1138,10 @@ async fn execute_tool(
     match name {
         "tmux_execute" => {
             tracing::warn!("tmux_execute called but no longer supported — use shell_input instead");
-            Ok("tmux_execute is no longer available. Use shell_input to type into Claude Code.".into())
+            Ok(
+                "tmux_execute is no longer available. Use shell_input to type into Claude Code."
+                    .into(),
+            )
         }
         "shell_input" => {
             let pane = input["pane"].as_str().unwrap_or("%0");
@@ -1084,7 +1151,10 @@ async fn execute_tool(
             // Reject empty text — pressing Enter with nothing sends a blank prompt
             if text.trim().is_empty() {
                 tracing::warn!("Blocked empty shell_input to {}", pane);
-                return Ok("Error: empty text not allowed — would submit a blank prompt to Claude Code.".into());
+                return Ok(
+                    "Error: empty text not allowed — would submit a blank prompt to Claude Code."
+                        .into(),
+                );
             }
 
             tracing::info!("Shell input to {}: {:?} (enter={})", pane, text, enter);
@@ -1096,7 +1166,9 @@ async fn execute_tool(
             Ok("clear_pane is no longer available. Claude Code manages its own screen.".into())
         }
         "read_pane" => {
-            tracing::warn!("read_pane called but no longer supported — context comes from JSONL history");
+            tracing::warn!(
+                "read_pane called but no longer supported — context comes from JSONL history"
+            );
             Ok("read_pane is no longer available. Use Claude Code's conversation history for context.".into())
         }
         "speak" => {
@@ -1179,21 +1251,42 @@ fn is_noise(text: &str) -> bool {
     // Common filler / noise transcriptions
     let lower = text.to_lowercase();
     let noise_phrases = [
-        "um", "uh", "hmm", "hm", "ah", "oh", "eh",
-        "...", "you", "the", "a", "i", "it",
-        "thank you.", "thanks for watching",
-        "bye.", "goodbye.", "see you.",
-        "subtitles by", "translated by",
-        "music", "applause", "laughter",
+        "um",
+        "uh",
+        "hmm",
+        "hm",
+        "ah",
+        "oh",
+        "eh",
+        "...",
+        "you",
+        "the",
+        "a",
+        "i",
+        "it",
+        "thank you.",
+        "thanks for watching",
+        "bye.",
+        "goodbye.",
+        "see you.",
+        "subtitles by",
+        "translated by",
+        "music",
+        "applause",
+        "laughter",
     ];
     if word_count <= 1 && noise_phrases.contains(&lower.trim_end_matches('.').trim()) {
         return true;
     }
     // Common STT hallucinations (model outputs for silence/noise)
     let hallucinations = [
-        "foreign", "silence", "inaudible",
-        "please subscribe", "like and subscribe",
-        "subtitles by", "translated by",
+        "foreign",
+        "silence",
+        "inaudible",
+        "please subscribe",
+        "like and subscribe",
+        "subtitles by",
+        "translated by",
     ];
     let trimmed_lower = lower.trim_end_matches(|c: char| !c.is_alphabetic()).trim();
     if hallucinations.contains(&trimmed_lower) {

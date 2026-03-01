@@ -141,19 +141,35 @@ async fn process_command(
     match cmd {
         IpcCommand::Mute => {
             let _ = event_tx.send(Event::MuteToggle);
-            IpcResponse { ok: true, data: None, error: None }
+            IpcResponse {
+                ok: true,
+                data: None,
+                error: None,
+            }
         }
         IpcCommand::Interrupt => {
             let _ = event_tx.send(Event::Interrupt);
-            IpcResponse { ok: true, data: None, error: None }
+            IpcResponse {
+                ok: true,
+                data: None,
+                error: None,
+            }
         }
         IpcCommand::VoiceToggle => {
             let _ = event_tx.send(Event::VoiceToggle);
-            IpcResponse { ok: true, data: None, error: None }
+            IpcResponse {
+                ok: true,
+                data: None,
+                error: None,
+            }
         }
         IpcCommand::Quit => {
             let _ = event_tx.send(Event::Quit);
-            IpcResponse { ok: true, data: None, error: None }
+            IpcResponse {
+                ok: true,
+                data: None,
+                error: None,
+            }
         }
         IpcCommand::Status => {
             let s = state.read().await;
@@ -175,9 +191,11 @@ async fn process_command(
         }
         IpcCommand::Conversation => {
             let s = state.read().await;
-            let data: Vec<serde_json::Value> = s.conversation.iter().map(|(role, text)| {
-                serde_json::json!({"role": role, "text": text})
-            }).collect();
+            let data: Vec<serde_json::Value> = s
+                .conversation
+                .iter()
+                .map(|(role, text)| serde_json::json!({"role": role, "text": text}))
+                .collect();
             IpcResponse {
                 ok: true,
                 data: Some(serde_json::Value::Array(data)),
@@ -190,7 +208,8 @@ async fn process_command(
 /// Send a command to the daemon over the Unix socket and return the response.
 pub async fn send_command(cmd: &str, session_name: &str) -> Result<IpcResponse> {
     let path = socket_path(session_name);
-    let stream = UnixStream::connect(&path).await
+    let stream = UnixStream::connect(&path)
+        .await
         .map_err(|_| anyhow::anyhow!("Cannot connect to vclaw daemon. Is it running?"))?;
 
     let (reader, mut writer) = stream.into_split();
@@ -227,10 +246,16 @@ pub fn format_conversation(data: &serde_json::Value) -> String {
             let text = entry["text"].as_str().unwrap_or("");
             if role == "You" {
                 // Cyan for user
-                output.push_str(&format!("\x1b[1;36m{}: \x1b[0;36m{}\x1b[0m\n\n", role, text));
+                output.push_str(&format!(
+                    "\x1b[1;36m{}: \x1b[0;36m{}\x1b[0m\n\n",
+                    role, text
+                ));
             } else {
                 // White/bold for vclaw
-                output.push_str(&format!("\x1b[1;37m{}: \x1b[0;37m{}\x1b[0m\n\n", role, text));
+                output.push_str(&format!(
+                    "\x1b[1;37m{}: \x1b[0;37m{}\x1b[0m\n\n",
+                    role, text
+                ));
             }
         }
     }

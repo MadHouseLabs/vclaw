@@ -66,7 +66,11 @@ fn resolve_client(session: &str) -> Option<String> {
         .and_then(|o| {
             let s = String::from_utf8_lossy(&o.stdout);
             let name = s.lines().next().unwrap_or("").trim();
-            if name.is_empty() { None } else { Some(name.to_string()) }
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
         })
 }
 
@@ -78,8 +82,13 @@ impl StatusBar {
             last_content: std::sync::Mutex::new(String::new()),
         };
         // Initial set-option (no refresh-client yet — no client attached)
-        tmux_fire_and_forget(&["set-option", "-t", session_name, "status-right",
-                               "#[fg=colour245]\u{25c7} starting"]);
+        tmux_fire_and_forget(&[
+            "set-option",
+            "-t",
+            session_name,
+            "status-right",
+            "#[fg=colour245]\u{25c7} starting",
+        ]);
         Ok(bar)
     }
 
@@ -101,7 +110,13 @@ impl StatusBar {
 
     /// Send content to tmux and force an immediate repaint.
     fn push_to_tmux(&self, content: &str) {
-        tmux_fire_and_forget(&["set-option", "-t", &self.session_name, "status-right", content]);
+        tmux_fire_and_forget(&[
+            "set-option",
+            "-t",
+            &self.session_name,
+            "status-right",
+            content,
+        ]);
         if let Some(client) = self.get_client() {
             tmux_fire_and_forget(&["refresh-client", "-S", "-t", &client]);
         }
@@ -119,15 +134,9 @@ impl StatusBar {
                         "#[fg=colour114]\u{25c7} ready".to_string()
                     }
                 }
-                VoiceStatus::Listening => {
-                    "#[fg=colour114,bold]\u{25c6} listening".to_string()
-                }
-                VoiceStatus::Thinking => {
-                    "#[fg=colour221,bold]\u{25c6} thinking".to_string()
-                }
-                VoiceStatus::Speaking => {
-                    "#[fg=colour117,bold]\u{25c6} speaking".to_string()
-                }
+                VoiceStatus::Listening => "#[fg=colour114,bold]\u{25c6} listening".to_string(),
+                VoiceStatus::Thinking => "#[fg=colour221,bold]\u{25c6} thinking".to_string(),
+                VoiceStatus::Speaking => "#[fg=colour117,bold]\u{25c6} speaking".to_string(),
             }
         };
 
