@@ -37,8 +37,8 @@ fn now_ms() -> u64 {
 }
 
 impl StatusBar {
-    pub fn new() -> Result<Self> {
-        let path = TmuxController::status_file_path();
+    pub fn new(session_name: &str) -> Result<Self> {
+        let path = TmuxController::status_file_path_for_session(session_name);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

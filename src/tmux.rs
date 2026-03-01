@@ -113,16 +113,16 @@ impl TmuxController {
             .unwrap_or(false)
     }
 
-    pub fn status_file_path() -> PathBuf {
+    pub fn status_file_path_for_session(session_name: &str) -> PathBuf {
         dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("vclaw")
-            .join("status.txt")
+            .join(format!("status-{}.txt", session_name))
     }
 
     /// Configure the tmux session with vclaw status bar and key bindings.
     pub async fn configure_session(&self) -> Result<()> {
-        let status_file = Self::status_file_path();
+        let status_file = Self::status_file_path_for_session(&self.session_name);
         let status_path = status_file.to_string_lossy();
 
         // Use shell quoting inside #() to handle paths with spaces
@@ -174,37 +174,39 @@ impl TmuxController {
             "window-status-format", "#[fg=colour245]#W#[default]",
         ]).await?;
 
-        // Key bindings (root table — no prefix needed)
-        // Use --session flag so ctl connects to the right daemon regardless of pane cwd
-        let ctl_voice = format!("vclaw --session {} ctl voice_toggle", self.session_name);
-        let ctl_mute = format!("vclaw --session {} ctl mute", self.session_name);
-        let ctl_interrupt = format!("vclaw --session {} ctl interrupt", self.session_name);
-        let ctl_conversation = format!("vclaw --session {} ctl conversation", self.session_name);
+        // Key bindings use #{session_name} so tmux resolves the CURRENT session
+        // at keypress time. This way multiple vclaw instances don't fight over bindings —
+        // F12 always talks to whichever session you're in.
+        let ctl_voice = "vclaw --session #{session_name} ctl voice_toggle";
+        let ctl_mute = "vclaw --session #{session_name} ctl mute";
+        let ctl_interrupt = "vclaw --session #{session_name} ctl interrupt";
+        let ctl_conversation = "vclaw --session #{session_name} ctl conversation";
 
+        // Root table — no prefix needed
         self.execute_args(&[
             "bind-key", "-T", "root", "F12",
-            "run-shell", &ctl_voice,
+            "run-shell", ctl_voice,
         ]).await?;
         self.execute_args(&[
             "bind-key", "-T", "root", "M-m",
-            "run-shell", &ctl_mute,
+            "run-shell", ctl_mute,
         ]).await?;
         // Interrupt is handled by F12 toggle (press while speaking/processing).
         // Escape in prefix table as explicit fallback.
         self.execute_args(&[
             "bind-key", "Escape",
-            "run-shell", &ctl_interrupt,
+            "run-shell", ctl_interrupt,
         ]).await?;
 
-        // Key bindings (prefix table)
+        // Prefix table
         self.execute_args(&[
             "bind-key", "Space",
-            "run-shell", &ctl_voice,
+            "run-shell", ctl_voice,
         ]).await?;
         self.execute_args(&[
             "bind-key", "C",
             "display-popup", "-w", "80%", "-h", "80%",
-            "sh", "-c", &ctl_conversation,
+            "sh", "-c", ctl_conversation,
         ]).await?;
 
         Ok(())

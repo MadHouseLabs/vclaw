@@ -266,7 +266,7 @@ async fn main() -> Result<()> {
     let shared_state = Arc::new(RwLock::new(SharedState::default()));
 
     // Status bar — runs as its own task with a dedicated event subscription
-    let status_bar = status::StatusBar::new()?;
+    let status_bar = status::StatusBar::new(&session_name)?;
     let status_audio_level = voice_engine.as_ref()
         .map(|e| e.audio_level.clone())
         .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicU8::new(0)));
@@ -347,17 +347,9 @@ async fn main() -> Result<()> {
 
     // Cleanup
     let _ = std::fs::remove_file(ipc::socket_path(&session_name));
-    status_bar_cleanup();
+    let _ = std::fs::remove_file(tmux::TmuxController::status_file_path_for_session(&session_name));
 
     Ok(())
-}
-
-fn status_bar_cleanup() {
-    let path = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("vclaw")
-        .join("status.txt");
-    let _ = std::fs::remove_file(path);
 }
 
 async fn voice_task(
