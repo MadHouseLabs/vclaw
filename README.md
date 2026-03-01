@@ -54,10 +54,16 @@ brew install cmake
 # Linux (Debian/Ubuntu)
 sudo apt install cmake build-essential libasound2-dev
 
-# Build
+# Build (OAuth will not work without the client ID)
 cargo install --path .
-# Or: cargo build --release && cp target/release/vclaw /usr/local/bin/
+
+# Build with OAuth support
+ANTHROPIC_OAUTH_CLIENT_ID="<your-client-id>" cargo install --path .
 ```
+
+> **Note:** The OAuth client ID is injected at compile time. Release binaries get it
+> from a GitHub Actions secret. Local builds without it will still compile but OAuth
+> login (`vclaw auth`) won't work — you can use `ANTHROPIC_API_KEY` env var instead.
 
 ### Runtime dependencies
 
