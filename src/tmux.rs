@@ -97,11 +97,12 @@ impl TmuxController {
     }
 
     pub async fn send_keys(&self, target: &str, keys: &str, enter: bool) -> Result<()> {
-        // Use -l (literal) flag to send text as-is, then Enter separately if requested.
-        // This prevents tmux from interpreting key names in the text.
-        self.execute_raw(&format!("send-keys -t {} -l '{}'", target, keys.replace('\'', "'\"'\"'"))).await?;
+        // Use execute_args (direct process args) instead of execute_raw (sh -c)
+        // to avoid shell escaping issues with special characters in the text.
+        // The -l flag sends text literally without tmux interpreting key names.
+        self.execute_args(&["send-keys", "-t", target, "-l", keys]).await?;
         if enter {
-            self.execute_raw(&format!("send-keys -t {} Enter", target)).await?;
+            self.execute_args(&["send-keys", "-t", target, "Enter"]).await?;
         }
         Ok(())
     }

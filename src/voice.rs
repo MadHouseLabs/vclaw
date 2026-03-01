@@ -312,6 +312,10 @@ impl VoiceEngine {
         // Receiver task: reads transcripts from WS, emits events
         let event_tx = self.event_tx.clone();
         tokio::spawn(async move {
+            // Track last committed text to deduplicate — ElevenLabs can send both
+            // committed_transcript and committed_transcript_with_timestamps for
+            // the same utterance, which would fire UserSaid twice.
+            let mut last_committed = String::new();
             while let Some(msg_result) = ws_read.next().await {
                 match msg_result {
                     Ok(WsMessage::Text(text)) => {
@@ -330,9 +334,12 @@ impl VoiceEngine {
                                 }
                                 "committed_transcript" | "committed_transcript_with_timestamps" => {
                                     let text = json["text"].as_str().unwrap_or("").trim().to_string();
-                                    if !text.is_empty() {
+                                    if !text.is_empty() && text != last_committed {
                                         tracing::info!("Realtime STT: {:?}", text);
-                                        let _ = event_tx.send(Event::UserSaid(text));
+                                        let _ = event_tx.send(Event::UserSaid(text.clone()));
+                                        last_committed = text;
+                                    } else if text == last_committed {
+                                        tracing::debug!("Skipping duplicate committed transcript: {:?}", text);
                                     }
                                 }
                                 "error" | "auth_error" | "quota_exceeded" | "rate_limited" => {
