@@ -95,17 +95,8 @@ Credentials are stored in `~/.config/vclaw/credentials.toml`.
 ## Usage
 
 ```sh
-vclaw                          # Start in current directory
-vclaw --voice-mode ptk         # Push-to-talk mode (F12 to record)
-vclaw --voice-mode always_on   # Always listening (default with ElevenLabs STT)
-vclaw --whisper base           # Use local Whisper model (tiny/base/small)
-vclaw --session my-project     # Custom session name
-vclaw attach                   # Reattach to existing session
-vclaw ctl status               # Query daemon status
-vclaw ctl mute                 # Toggle mute
-vclaw ctl interrupt            # Interrupt current action
-vclaw ctl conversation         # View conversation history
-vclaw ctl quit                 # Stop the daemon
+vclaw              # Start in current directory
+vclaw attach       # Reattach to existing session
 ```
 
 ### Key bindings (inside tmux)
