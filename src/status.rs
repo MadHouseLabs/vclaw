@@ -2,15 +2,14 @@ use anyhow::Result;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::event::VoiceStatus;
-use crate::tmux::TmuxController;
 
-/// Minimum interval between tmux refresh calls (ms).
+/// Minimum interval between tmux set-option calls (ms).
 const REFRESH_THROTTLE_MS: u64 = 100;
 
 static LAST_REFRESH: AtomicU64 = AtomicU64::new(0);
 
 pub struct StatusBar {
-    path: std::path::PathBuf,
+    session_name: String,
 }
 
 // Status bar design system
@@ -35,6 +34,9 @@ pub struct StatusBar {
 // audio_level is 0–8 (computed as rms * 80, capped at 8 in voice.rs).
 // Typical speech sits around 3–7, so diamond thresholds are spread
 // across that range: >2 / >4 / >6.
+//
+// Updates are applied via `tmux set-option status-right` directly
+// (not via file + #(cat ...)) so changes appear immediately.
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -43,14 +45,18 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn set_status_right(session: &str, content: &str) {
+    let _ = std::process::Command::new("tmux")
+        .args(["set-option", "-t", session, "status-right", content])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
 impl StatusBar {
     pub fn new(session_name: &str) -> Result<Self> {
-        let path = TmuxController::status_file_path_for_session(session_name);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, "#[fg=colour245]\u{25c7} starting")?;
-        Ok(Self { path })
+        set_status_right(session_name, "#[fg=colour245]\u{25c7} starting");
+        Ok(Self { session_name: session_name.to_string() })
     }
 
     pub fn update(&self, voice_status: &VoiceStatus, muted: bool, audio_level: u8, ptt_mode: bool) -> Result<()> {
@@ -82,18 +88,12 @@ impl StatusBar {
             }
         };
 
-        std::fs::write(&self.path, &content)?;
-
-        // Throttle refresh calls to avoid hammering tmux
+        // Throttle to avoid hammering tmux
         let now = now_ms();
         let last = LAST_REFRESH.load(Ordering::Relaxed);
         if now.saturating_sub(last) >= REFRESH_THROTTLE_MS {
             LAST_REFRESH.store(now, Ordering::Relaxed);
-            let _ = std::process::Command::new("tmux")
-                .args(["refresh-client", "-S"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
+            set_status_right(&self.session_name, &content);
         }
 
         Ok(())

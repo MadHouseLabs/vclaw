@@ -359,7 +359,6 @@ async fn main() -> Result<()> {
 
     // Cleanup
     let _ = std::fs::remove_file(ipc::socket_path(&session_name));
-    let _ = std::fs::remove_file(tmux::TmuxController::status_file_path_for_session(&session_name));
 
     Ok(())
 }

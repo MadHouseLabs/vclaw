@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use tokio::process::Command;
 use crate::event::PaneInfo;
-use std::path::PathBuf;
 
 pub struct TmuxController {
     session_name: String,
@@ -114,33 +113,13 @@ impl TmuxController {
             .unwrap_or(false)
     }
 
-    pub fn status_file_path_for_session(session_name: &str) -> PathBuf {
-        dirs::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join("vclaw")
-            .join(format!("status-{}.txt", session_name))
-    }
-
     /// Configure the tmux session with vclaw status bar and key bindings.
     pub async fn configure_session(&self) -> Result<()> {
-        let status_file = Self::status_file_path_for_session(&self.session_name);
-        let status_path = status_file.to_string_lossy();
-
-        // Use shell quoting inside #() to handle paths with spaces
-        let cat_cmd = format!("#(cat \"{}\")", status_path);
-
-        // Status bar — use execute_args to avoid shell escaping issues
-        self.execute_args(&[
-            "set-option", "-t", &self.session_name,
-            "status-right", &cat_cmd,
-        ]).await?;
+        // status-right is set directly by StatusBar::update() via tmux set-option,
+        // so we only configure the length and styling here.
         self.execute_args(&[
             "set-option", "-t", &self.session_name,
             "status-right-length", "40",
-        ]).await?;
-        self.execute_args(&[
-            "set-option", "-t", &self.session_name,
-            "status-interval", "1",
         ]).await?;
         // Style the status bar
         self.execute_args(&[
