@@ -286,7 +286,12 @@ impl VoiceEngine {
     /// seamlessly routes to the new WebSocket.
     pub async fn start_realtime_stream(&self) -> Result<tokio::sync::mpsc::Receiver<()>> {
         let (audio_tx, mut audio_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
-        *self.audio_chunk_tx.lock().unwrap() = Some(audio_tx);
+        match self.audio_chunk_tx.lock() {
+            Ok(mut guard) => *guard = Some(audio_tx),
+            Err(e) => {
+                anyhow::bail!("audio chunk tx lock poisoned: {}", e);
+            }
+        }
         let (disconnect_tx, disconnect_rx) = tokio::sync::mpsc::channel::<()>(1);
 
         let url = "wss://api.elevenlabs.io/v1/speech-to-text/realtime?\
@@ -456,7 +461,11 @@ impl VoiceEngine {
         };
 
         let needs_resample = native_rate != 16000 || native_channels != 1;
-        let use_realtime = self.audio_chunk_tx.lock().unwrap().is_some();
+        let use_realtime = self
+            .audio_chunk_tx
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false);
 
         let stream = if use_realtime {
             // Realtime mode: stream audio to WebSocket with local energy gate.
@@ -477,8 +486,10 @@ impl VoiceEngine {
                     };
 
                     let pcm_bytes = f32_to_i16_bytes(&mono16k);
-                    if let Some(ref tx) = *audio_tx_holder.lock().unwrap() {
-                        let _ = tx.try_send(pcm_bytes);
+                    if let Ok(guard) = audio_tx_holder.lock() {
+                        if let Some(ref tx) = *guard {
+                            let _ = tx.try_send(pcm_bytes);
+                        }
                     }
                 },
                 |err| tracing::error!("Audio capture error: {}", err),
@@ -499,8 +510,11 @@ impl VoiceEngine {
                             data.to_vec()
                         };
 
-                        if *is_recording.lock().unwrap() {
-                            buffer.lock().unwrap().extend_from_slice(&mono16k);
+                        let recording = is_recording.lock().map(|g| *g).unwrap_or(false);
+                        if recording {
+                            if let Ok(mut buf) = buffer.lock() {
+                                buf.extend_from_slice(&mono16k);
+                            }
                         }
                     },
                     |err| tracing::error!("Audio capture error: {}", err),
@@ -531,16 +545,22 @@ impl VoiceEngine {
                                 .sqrt();
                             let is_speech = rms > ENERGY_THRESHOLD;
 
-                            let mut sf = speech_frames.lock().unwrap();
-                            let mut silf = silence_frames.lock().unwrap();
-                            let mut rec = is_recording.lock().unwrap();
+                            let (Ok(mut sf), Ok(mut silf), Ok(mut rec)) = (
+                                speech_frames.lock(),
+                                silence_frames.lock(),
+                                is_recording.lock(),
+                            ) else {
+                                return;
+                            };
 
                             if is_speech {
                                 *sf += 1;
                                 *silf = 0;
                                 if !*rec && *sf >= MIN_SPEECH_FRAMES {
                                     *rec = true;
-                                    buffer.lock().unwrap().clear();
+                                    if let Ok(mut buf) = buffer.lock() {
+                                        buf.clear();
+                                    }
                                     let _ =
                                         event_tx.send(Event::VoiceStatus(VoiceStatus::Listening));
                                 }
@@ -554,7 +574,9 @@ impl VoiceEngine {
                             }
 
                             if *rec {
-                                buffer.lock().unwrap().extend_from_slice(&mono16k);
+                                if let Ok(mut buf) = buffer.lock() {
+                                    buf.extend_from_slice(&mono16k);
+                                }
                             }
                         },
                         |err| tracing::error!("Audio capture error: {}", err),
@@ -569,20 +591,28 @@ impl VoiceEngine {
     }
 
     pub fn start_recording(&self) {
-        self.audio_buffer.lock().unwrap().clear();
-        *self.is_recording.lock().unwrap() = true;
+        if let Ok(mut buf) = self.audio_buffer.lock() {
+            buf.clear();
+        }
+        if let Ok(mut rec) = self.is_recording.lock() {
+            *rec = true;
+        }
         let _ = self
             .event_tx
             .send(Event::VoiceStatus(VoiceStatus::Listening));
     }
 
     pub fn stop_recording(&self) {
-        *self.is_recording.lock().unwrap() = false;
+        if let Ok(mut rec) = self.is_recording.lock() {
+            *rec = false;
+        }
     }
 
     /// Clear the audio buffer (e.g. after TTS playback to discard echo).
     pub fn clear_buffer(&self) {
-        self.audio_buffer.lock().unwrap().clear();
+        if let Ok(mut buf) = self.audio_buffer.lock() {
+            buf.clear();
+        }
     }
 
     /// Transcribe using the configured STT provider (batch mode only).
@@ -592,7 +622,11 @@ impl VoiceEngine {
             .event_tx
             .send(Event::VoiceStatus(VoiceStatus::Thinking));
 
-        let mut audio = self.audio_buffer.lock().unwrap().clone();
+        let mut audio = self
+            .audio_buffer
+            .lock()
+            .map_err(|e| anyhow::anyhow!("audio buffer lock poisoned: {}", e))?
+            .clone();
         if audio.is_empty() {
             return Ok(String::new());
         }

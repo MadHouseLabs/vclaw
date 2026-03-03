@@ -95,14 +95,16 @@ impl StatusBar {
     /// Get or lazily resolve the tmux client name.
     fn get_client(&self) -> Option<String> {
         {
-            let cached = self.client_name.lock().unwrap();
+            let cached = self.client_name.lock().ok()?;
             if cached.is_some() {
                 return cached.clone();
             }
         }
         // Lock dropped — resolve_client spawns a blocking process
         if let Some(name) = resolve_client(&self.session_name) {
-            *self.client_name.lock().unwrap() = Some(name.clone());
+            if let Ok(mut guard) = self.client_name.lock() {
+                *guard = Some(name.clone());
+            }
             return Some(name);
         }
         None
@@ -141,12 +143,17 @@ impl StatusBar {
         };
 
         // Skip tmux calls entirely if content hasn't changed
-        let mut last = self.last_content.lock().unwrap();
-        if *last == content {
-            return Ok(());
+        match self.last_content.lock() {
+            Ok(mut last) => {
+                if *last == content {
+                    return Ok(());
+                }
+                *last = content.clone();
+            }
+            Err(_) => {
+                // Poisoned mutex — skip dedup check and push update anyway
+            }
         }
-        *last = content.clone();
-        drop(last);
 
         self.push_to_tmux(&content);
         Ok(())

@@ -62,19 +62,25 @@ impl AudioPlayer {
 
         // Store sink so interrupt() can stop it directly from any thread
         let sink = Arc::new(sink);
-        *self.active_sink.lock().unwrap() = Some(sink.clone());
+        if let Ok(mut guard) = self.active_sink.lock() {
+            *guard = Some(sink.clone());
+        }
 
         // Poll for completion or interrupt
         while !sink.empty() {
             if self.interrupted.load(Ordering::SeqCst) {
                 sink.stop();
-                *self.active_sink.lock().unwrap() = None;
+                if let Ok(mut guard) = self.active_sink.lock() {
+                    *guard = None;
+                }
                 return Ok(());
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
-        *self.active_sink.lock().unwrap() = None;
+        if let Ok(mut guard) = self.active_sink.lock() {
+            *guard = None;
+        }
         Ok(())
     }
 }

@@ -183,10 +183,17 @@ async fn process_command(
                 voice_status: status_str.to_string(),
                 muted: s.muted,
             };
-            IpcResponse {
-                ok: true,
-                data: Some(serde_json::to_value(data).unwrap()),
-                error: None,
+            match serde_json::to_value(data) {
+                Ok(value) => IpcResponse {
+                    ok: true,
+                    data: Some(value),
+                    error: None,
+                },
+                Err(e) => IpcResponse {
+                    ok: false,
+                    data: None,
+                    error: Some(format!("serialization error: {}", e)),
+                },
             }
         }
         IpcCommand::Conversation => {
